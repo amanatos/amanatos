@@ -1,0 +1,432 @@
+---
+title: "NBA Scoring Analysis through Dean Oliver's Four Factors"
+author: "Andy Manatos"
+date: "05/10/2024"
+format: html
+editor: visual
+---
+
+## Introduction:
+
+In the NBA, scoring involves you and your 4 other teammates trying to put the ball in the hoop a bunch of times over a 48 minute span. Ideally, if you do that more than the other team, you win the game! Over this presentation, we will focus mostly on the offensive perspective with Points Per 100 Possessions as the dependent variable, but we will also try to predict wins from our findings. In the modern NBA, offense is better than at any point in history, with a new team being crowned the "best offense in NBA history" nearly every year. With that being said, congratulations to the Boston Celtics who scored 123.2 points per 100 possessions! To put into perspective just how much offense has gotten better, we will revisit the 2015-16 Golden State Warriors, who won an NBA record 73 games in the regular season, had the first unanimous MVP in history (Stephen Curry), and were crowned (at the time), the best offense in NBA history. This year (2023-24) their Points Per 100 Possessions of 114.9 would have put them at 21st.
+
+```{r setup}
+library(tidyverse)
+library(hoopR)
+library(ggplot2)
+library(car)
+library(nbastatR)
+library(caret)
+library(patchwork)
+```
+
+## Points \~ Year
+
+First, using data from CleaningTheGlass, starting in 2004, we will look at how much scoring has gone up over time and if this relationship is linear.
+
+```{r league_average_data}
+league_avg <- data.frame(
+  year = c(2004:2024),
+  year1 = c(1:21),
+  pts = c(102.3, 104.7, 106.0, 106.4, 107.4, 108.1, 107.7, 107.4, 104.6, 105.8, 106.7, 105.8, 106.6, 109.0, 108.4, 110.6, 110.8, 112.8, 112.3, 115.1, 115.6),
+  efg = c(47.4, 48.2, 49.3, 49.9, 50.1, 50.3, 50.4, 50.1, 49.0, 49.9, 50.4, 49.8, 50.5,  51.7, 52.4, 52.7, 53.2, 54.1, 53.5, 54.8, 55.0 ),
+  tovpct = c(16.4, 15.8, 15.7, 16.3, 15.1, 15.1, 15.2, 15.3, 15.8, 15.7, 15.5, 15.2, 14.9, 14.4, 14.6, 14.0, 14.4, 13.8, 13.9, 14.1, 13.7 ),
+  orbpct = c(30.5, 30.1, 29.4, 29.2, 28.8, 28.9, 28.8, 28.8, 29.4, 29.1, 28.2,28.0, 26.6, 26.2, 25.4, 25.9,  25.4, 25.1, 26.2, 26.8, 26.8 ), 
+  ftrate = c(22.9, 24.5, 24.9, 24.7, 23.2, 23.6, 22.9, 23.0, 20.8, 20.4, 21.6, 20.6, 21.0, 21.0, 19.4, 19.9, 20.2, 19.2, 19.3, 20.9, 19.2 )
+)
+```
+
+The league average data also includes Dean Oliver's Four Factors, which I will dive deeper into when predicting scoring output.
+
+```{r}
+league_avg_plot <- ggplot(league_avg) +
+  aes(x = year, y = pts) + 
+  geom_point() + 
+  geom_smooth(se = F, method = lm) +
+  geom_smooth(se = F, lty = 2, color = "red") + 
+  scale_x_continuous(breaks = c(2004:2024)) + theme(axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif",
+        angle = 315), axis.text.y = element_text(family = "serif"),
+    panel.background = element_rect(fill = "antiquewhite"),
+    plot.background = element_rect(fill = "white")) +labs(title = "League Average Points Per 100 Possessions ~ Time",
+    x = "Year", y = "Points Per 100 Possessions")
+league_avg_plot
+```
+
+This plot shows what I stated above: in the past 20 years, points per 100 possessions has increased pretty drastically. However, we can see that a linear model describing this relationship would probably not be the best idea. Starting at the fifth degree and working my way down, I found the quartic term to be significant and went ahead with that model.
+
+```{r quartic_points_model}
+ppp_year_degree4 <- lm(pts ~ year1 + year12 + year13 + year14, data = league_avg %>% mutate(year12 = year1^2, year13 = year1^3, year14 = year1^4))
+summary(ppp_year_degree4)
+#Rsquared = .9543, adjrsq = .9428
+plot(ppp_year_degree4)
+#plots looking pretty decent
+```
+
+With an $R^2$ of 0.9543, I believe this model describes the relationship very well, but we have to center it and check our assumptions.
+
+```{r centered_model_and_assumptions}
+ppp_year_centered4 <- lm(pts ~ yearc + year2c + year3c + year4c, data = league_avg %>% mutate(yearc = year - mean(year), year2c = yearc^2, year3c = yearc^3, year4c = yearc^4))
+summary(ppp_year_centered4)
+
+car::vif(ppp_year_centered4)
+
+plot(ppp_year_centered4)
+```
+
+The residuals vs. fitted plot shows constant variance except for a couple points, the QQplot does not deviate much from the line, and there are no points with a Cook's D higher than even 0.5. This way of centering only helps the quadratic term, although it did reduce the VIFs drastically. However, some of the VIFs remain above 10 (about 12). From this, I can still get a value next year's scoring output. Additionally, this plot of the quartic model shows that it is a good fit for the data.
+
+```{r quartic_model_plot}
+league_avg_plot_model <- ggplot(league_avg %>% 
+                            mutate( 
+                                   pred4 = predict(ppp_year_centered4))) +
+  aes(x = year, y = pts) + 
+  geom_point()  +
+  geom_line(aes(y = pred4), color = "green", lty = 2) +
+  scale_x_continuous(breaks = c(2004:2024)) + theme(axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif",
+        angle = 315), axis.text.y = element_text(family = "serif"),
+    panel.background = element_rect(fill = "antiquewhite"),
+    plot.background = element_rect(fill = "white")) +labs(title = "League Average Points Per 100 Possessions ~ Time",
+    x = "Year", y = "Points Per 100 Possessions")
+league_avg_plot_model
+```
+
+## Predicting Scoring Output: League Average Four Factors (2004-2024)
+
+The first multiple linear regression model we will look at is scoring output as a function Dean Oliver's Four Factors. In short, these four factors are the four ways a possession can end.
+
+1.  Effective Field Goal Percentage (eFG%): The possession ends on a made shot. eFG% measures how efficiently a player or team makes shots by considering that a three point shot is worth more.
+
+2.  Turnover Percentage (TOV%): The possession ends in a turnover. You gave the ball away to the other team. This measures how many times you turned the ball over relative to how many possessions you had. In this case, per 100 possessions.
+
+3.  Offensive Rebound Percentage (ORB%): Your team missed your shot, but you rebounded your own miss, granting you another possession. This measures how many rebounds your team gets on your own missed shots.
+
+4.  Free Throw Rate: You got fouled on a jump shot or you are in the bonus. Each free throw is worth one point. This measures how many free throws your team MAKES per the amount of shots you take.
+
+We will use these four variables to predict Points Per 100 Possessions.
+
+```{r model_league_average_four_factors}
+ppp_lm <- lm(pts ~ efg + tovpct + orbpct + ftrate, data = league_avg)
+summary(ppp_lm)
+```
+
+With an \$R\^2\$ of 0.9979, we see that these four numbers can tell us a lot about how many points per possession the average team will score. From this model, we learn that you will score more if you shoot more efficiently, turn the ball over less, rebound more of your missed shots, and make more free throws per 100 field goal attempts. But, we still have to check our assumptions:
+
+```{r checking_assumptions_league_avg_model}
+
+plot(ppp_lm)
+#normality and constant variance pretty good, no multicollinearity, nothing above a cook's d of 1, (maybe scale location plot is problematic?)
+vif(ppp_lm)
+
+car::avPlots(ppp_lm)
+```
+
+The residual plot looks mostly fine outside of that one point. The QQplot also looks mostly fine outside of that one point. Also, in the Residuals vs. Leverage plot no point has a Cook's Distance greater than 1. The avPlots confirm the assumption of linearity, and there are no VIFs above 10. With that being said, I am willing to move forward with this model.
+
+## Predicting Scoring Output: Team Four Factors (2014:2024)
+
+Since that first model performed so well, we will look at how the four factors perform if I let scoring output vary by team. We will look at 2014-2024 where the recent jump in scoring has taken place. CSV files will be attached in the submission.
+
+```{r data_for_team_four_factors}
+#files named in reverse order for some reason
+four_factors_14 <- readr::read_csv("~/STAT8406/league_four_factors_14.csv") %>% mutate(year = 2023)
+#2014 is 2023
+four_factors_15 <- readr::read_csv("~/STAT8406/league_four_factors_15.csv") %>% mutate(year = 2022)
+#2015 is 2022
+four_factors_16 <- readr::read_csv("~/STAT8406/league_four_factors_16.csv") %>% mutate(year = 2021)
+#2016 is 2021
+four_factors_17 <- readr::read_csv("~/STAT8406/league_four_factors_17.csv") %>% mutate(year = 2020)
+#2017 is 2020
+four_factors_18 <- readr::read_csv("~/STAT8406/league_four_factors_18.csv") %>% mutate(year = 2019)
+#2018 is 2019
+four_factors_19 <- readr::read_csv("~/STAT8406/league_four_factors_19.csv") %>% mutate(year = 2018)
+#2019 is 2018
+four_factors_20 <- readr::read_csv("~/STAT8406/league_four_factors_20.csv") %>% mutate(year = 2017)
+#2020 is 2017
+four_factors_21 <- readr::read_csv("~/STAT8406/league_four_factors_21.csv") %>% mutate(year = 2016)
+#2021 is 2016 for some reason
+four_factors_22 <- readr::read_csv("~/STAT8406/league_four_factors_22.csv") %>% mutate(year = 2015)
+#2022 is 2015 for some reason
+four_factors_23 <- readr::read_csv("~/STAT8406/league_four_factors_23.csv") %>% mutate(year = 2014)
+#2023 is 2014
+four_factors_24 <- readr::read_csv("~/STAT8406/league_four_factors_24.csv") %>% mutate(year = 2024)
+
+
+ctg_team_data <- bind_rows(four_factors_14, four_factors_15, four_factors_16, four_factors_17, four_factors_18, four_factors_19, four_factors_20, four_factors_21, four_factors_22, four_factors_23, four_factors_24)
+
+ctg_team_data_teams <- ctg_team_data %>%  
+  filter(Team != "Average") %>% 
+  mutate(off_efg = as.numeric(sub("%","",`OFFENSE: eFG%`)), 
+         off_tov_pct = as.numeric(sub("%","",`OFFENSE: TOV%`)),
+         off_orb_pct = as.numeric(sub("%","",`OFFENSE: ORB%`)),              off_ftr =  `OFFENSE: FT Rate`)
+
+
+team_model_1 <- lm(`OFFENSE: Pts/Poss` ~ off_efg + off_tov_pct + off_orb_pct + off_ftr, data = ctg_team_data_teams) 
+
+summary(team_model_1)
+
+```
+
+This model performs nearly as well, with an \$R\^2\$ of 0.9873! Once again, we can learn a lot of information from just these four variables, but we must check our assumptions.
+
+```{r checking_assumptions_team_model}
+plot(team_model_1)
+#plots look good
+
+car::vif(team_model_1)
+#no multicollinearity
+
+
+car::avPlots(team_model_1)
+```
+
+With a larger sample size, the residuals vs. fitted and QQplot both look much nicer. Also, there are no points with a Cook's Distance higher than 1. Additionally, there is no multicollinearity and the avPlots confirm the assumption of linearity. Since we have learned so much about scoring from Dean Oliver's Four Factors, we will revisit our league average plots, to see which of these variables explain the jump in scoring over the last 20 years.
+
+## What changed in the last 20 years?
+
+In order to see which of these four variables changed the most in the last 20 years, we will visualize each one of them with respect to time, just like we did with scoring. To quantify this, we will add each of these terms individually to our quartic model, and see which term added the most to the $R^2$ value (we can use \$R\^2\$ because the models will all have the same terms). First, we will look at the plots.
+
+```{r four_factors_vs_time_plots}
+league_avg_plot_efg <- ggplot(league_avg) +
+  aes(x = year, y = efg) + 
+  geom_point() + 
+  geom_smooth(se = F, method = lm) +
+  geom_smooth(se = F, lty = 2, color = "red") + 
+  scale_x_continuous(breaks = c(2004:2024)) + theme(axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif",
+        angle = 315), axis.text.y = element_text(family = "serif"),
+    panel.background = element_rect(fill = "antiquewhite"),
+    plot.background = element_rect(fill = "white")) +labs(title = "Effective Field Goal Percentage ~ Time",
+    x = "Year", y = "eFG%")
+
+#This looks very similar to the points per 100 plot, similar relationship. Positive coefficient in regression model
+
+league_avg_plot_tovpct <- ggplot(league_avg) +
+  aes(x = year, y = tovpct) + 
+  geom_point() + 
+  geom_smooth(se = F, method = lm) +
+  geom_smooth(se = F, lty = 2, color = "red") + 
+  scale_x_continuous(breaks = c(2004:2024)) + theme(axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif",
+        angle = 315), axis.text.y = element_text(family = "serif"),
+    panel.background = element_rect(fill = "antiquewhite"),
+    plot.background = element_rect(fill = "white")) +labs(title = "Turnover Percentage ~ Time",
+    x = "Year", y = "TOV%")
+
+#Consistent downard trend. Negative coefficient in model. Looks mostly linear wrt time. 
+
+league_avg_plot_orbpct <- ggplot(league_avg) +
+  aes(x = year, y = orbpct) + 
+  geom_point() + 
+  geom_smooth(se = F, method = lm) +
+  geom_smooth(se = F, lty = 2, color = "red") + 
+  scale_x_continuous(breaks = c(2004:2024)) + theme(axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif",
+        angle = 315), axis.text.y = element_text(family = "serif"),
+    panel.background = element_rect(fill = "antiquewhite"),
+    plot.background = element_rect(fill = "white")) +labs(title = "Offensive Rebound Percentage ~ Time",
+    x = "Year", y = "ORB%")
+#Offensive rebound percentage has weird path, (positive coefficient but going down until about 2021, but seems to be on the way up?)
+
+league_avg_plot_ftrate <- ggplot(league_avg) +
+  aes(x = year, y = ftrate) + 
+  geom_point() + 
+  geom_smooth(se = F, method = lm) +
+  geom_smooth(se = F, lty = 2, color = "red") + 
+  scale_x_continuous(breaks = c(2004:2024)) + theme(axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif",
+        angle = 315), axis.text.y = element_text(family = "serif"),
+    panel.background = element_rect(fill = "antiquewhite"),
+    plot.background = element_rect(fill = "white")) +labs(title = "Free Throw Rate ~ Time",
+    x = "Year", y = "Free Throw Rate")
+#positive coefficient for free throw rate, yet free throw rate has gone down while points per 100 possessions has gone up?
+
+league_avg_plot_efg + league_avg_plot_tovpct + league_avg_plot_orbpct + league_avg_plot_ftrate
+
+```
+
+Looking at the plots side by side, I hypothesize that the change in eFG% over time will best explain why scoring output has gone up. The relationship it has with respect to time is strikingly similar to that of Points Per 100 Possessions. Next, we will look at the models. Remember that the original \$R\^2\$ for the quartic model was 0.9543.
+
+```{r adding_each_variable_to_quartic}
+ppp_year_efg <- lm(pts ~ yearc + year2c + year3c + year4c + efg, data = league_avg %>% mutate(yearc = year - mean(year), year2c = yearc^2, year3c = yearc^3, year4c = yearc^4)) %>% summary()
+#R^2 = .9846
+ppp_year_tovpct <- lm(pts ~ yearc + year2c + year3c + year4c + tovpct, data = league_avg %>% mutate(yearc = year - mean(year), year2c = yearc^2, year3c = yearc^3, year4c = yearc^4)) %>% summary()
+#R^2 = .9719
+
+ppp_year_orbpct <- lm(pts ~ yearc + year2c + year3c + year4c + orbpct, data = league_avg %>% mutate(yearc = year - mean(year), year2c = yearc^2, year3c = yearc^3, year4c = yearc^4)) %>% summary()
+#R^2 = .964
+
+ppp_year_ftrate <- lm(pts ~ yearc + year2c + year3c + year4c + ftrate, data = league_avg %>% mutate(yearc = year - mean(year), year2c = yearc^2, year3c = yearc^3, year4c = yearc^4)) %>% summary()
+#R^2 = .9637
+```
+
+Here, we can see that my original hypothesis was correct! eFG% added the most to the \$R\^2\$ value. As for why I think this is, I believe the increase in three point shooting attempts over the past 20 years has led to better shot selection and more efficient scoring output. This can also explain why free throw rate has dropped, as there are less fouls on three point attempts.
+
+## Logistic Model Attempt (2005-2024)
+
+CleaningTheGlass does not give me access to game logs, so for this model I will use the hoopR package, which will give me access to team statistics from each game. I will filter to regular season only. Additionally, I will take out any exhibition games such as the All Star Game, or Team USA vs Team World (Rising Stars), because players notoriously do not play defense in these games, leading to ridiculously high scoring outputs. Additionally, this data does not have an accurate way of measuring the amount of possessions that are in a game.
+
+Since the data only contained counting stats, I had to calculate the Four Factors from them. With a win as the response, I will consider the differential as well as the ratio in all Four Factors variables. To make sure that teams are not double counted for individual games, I will subtract the away team's Four Factors from the home team's. For the ratio's, I cannot divide by 0. For turnover percentage as well as offensive rebound percentage, I reversed them (\$100-x\$ instead of $x.$) Data for logistic regression model:
+
+```{r data}
+teamstatdata <- hoopR::load_nba_team_box(seasons = 2005:2024)
+
+teamstatdata1 <- teamstatdata %>%
+   filter(team_display_name != "USA" & team_display_name != "Team Giannis" & team_display_name != "Team LeBron" & team_display_name != "Team Stephen" & team_display_name != "Team Durant" & team_display_name != "Eastern Conf All-Stars" & team_display_name != "Western Conf All-Stars" & team_display_name != "World") %>% 
+  mutate(orb_pct = 100*(offensive_rebounds / (field_goals_attempted - field_goals_made)),
+         tov_pct = 100*(turnovers / (field_goals_attempted + .475*free_throws_attempted + assists + turnovers)), 
+         efg_pct = 100*(((field_goals_made - three_point_field_goals_made) + 1.5*three_point_field_goals_made) / field_goals_attempted ) ,
+         ftr = free_throws_made / field_goals_attempted) 
+
+
+reg_team_model <- teamstatdata1 %>% 
+  filter(season_type == 2) %>% 
+  mutate(possessions = field_goals_attempted - offensive_rebounds + turnovers +  .45*free_throws_attempted, 
+         points_per_poss = team_score / possessions)
+
+reg_team_winpred_h <- reg_team_model %>% filter(team_home_away == "home") %>%  group_by(game_id) %>% 
+  rename("efg_pctH" = "efg_pct", 
+         "tov_pctH" = "tov_pct", 
+         "orb_pctH" = "orb_pct",
+         "ftrH" = "ftr",
+         "turnoversH" = "turnovers",
+         "orbH" = "offensive_rebounds")
+
+reg_team_winpred_a <- reg_team_model %>% filter(team_home_away == "away") %>% 
+  rename("efg_pctA" = "efg_pct", 
+         "tov_pctA" = "tov_pct", 
+         "orb_pctA" = "orb_pct",
+         "ftrA" = "ftr", 
+         "turnoversA" = "turnovers",
+         "orbA" = "offensive_rebounds")
+
+
+reg_team_winpred_diff <- full_join(reg_team_winpred_h, reg_team_winpred_a, by = "game_id") %>% 
+  mutate(efg_diff = efg_pctH - efg_pctA, 
+         tov_diff =  tov_pctH - tov_pctA,
+         orb_diff = orb_pctH - orb_pctA, 
+         ftr_diff = ftrH - ftrA, 
+         orb_diff_actual = orbH - orbA, 
+         tov_diff_actual = turnoversH - turnoversA)
+
+
+reg_team_winpred_ratio <- full_join(reg_team_winpred_h, reg_team_winpred_a, by = "game_id") %>% 
+  mutate(efg_ratio = efg_pctH / efg_pctA, 
+         poss_ratio =  (100 - tov_pctH) / (100 - tov_pctA),
+        #how many of possessions did you NOT turn the ball over?
+         orb_ratio = (100 - orb_pctH) / (100 - orb_pctA), 
+         #how many of your misses did you NOT get the offensive rebound?
+         ftr_ratio = ftrH / ftrA, 
+         tov_ratio = turnoversH / turnoversA,
+         orb_ratio_actual = orbH / orbA)
+
+```
+
+### The Models:
+
+I will use cross-validation to see how accurately my models are predicting wins and losses. Using random sampling, I split the data 80 / 20.
+
+#### Difference model:
+
+```{r four_factor_differential}
+set.seed(050824)
+training.samples <- reg_team_winpred_diff$team_winner.x %>% 
+  caret::createDataPartition(p = 0.8, list = FALSE)
+train.data  <- reg_team_winpred_diff[training.samples, ]
+test.data <- reg_team_winpred_diff[-training.samples, ]
+
+
+four_factors_winT <- glm(team_winner.x ~ efg_diff + tov_diff + orb_diff + ftr_diff, family = "binomial", data = train.data)
+summary(four_factors_winT)
+#all significant
+
+probabilities <- four_factors_winT %>% predict(test.data, type = "response")
+
+predicted.classes <- ifelse(probabilities > 0.5, 1, 0)
+
+mean(predicted.classes == test.data$team_winner.x)
+#Predicted with 93.7% accuracy!
+
+car::vif(four_factors_winT)
+
+
+plot(four_factors_winT, which = 2)
+```
+
+Although the model predicted the winner pretty accurately, it grossly violates the normality assumption, as the errors are very right skewed.
+
+#### Ratio Model:
+
+In order to remedy this problem, I tried to use ratios instead of differences.
+
+```{r four_factors_ratio_model}
+set.seed(050924)
+training.samples_ratio <- reg_team_winpred_ratio$team_winner.x %>% 
+  caret::createDataPartition(p = 0.8, list = FALSE)
+train.data_ratio  <- reg_team_winpred_ratio[training.samples_ratio, ]
+test.data_ratio <- reg_team_winpred_ratio[-training.samples_ratio, ]
+
+four_factors_winT_ratio <- glm(team_winner.x ~ efg_ratio + poss_ratio + orb_ratio + ftr_ratio, family = "binomial", data = train.data_ratio)
+summary(four_factors_winT_ratio)
+#all significant
+
+probabilities_ratio <- four_factors_winT_ratio %>% predict(test.data_ratio, type = "response")
+
+predicted.classes_ratio <- ifelse(probabilities_ratio > 0.5, 1, 0)
+
+mean(predicted.classes_ratio == test.data_ratio$team_winner.x)
+#Predicted with 93% accuracy
+
+plot(four_factors_winT_ratio, which = 2)
+
+
+```
+
+The normality of errors from this model looks better, although there are now more outliers. Additionally, the accuracy takes a (very) little drop down to 93.0%.
+
+## Extensions
+
+What would I have done if I had more time?
+
+1.  If I had more time, I would spend it fine-tuning my robust logistic regression model so that I could use it as a guide to predict wins in the future.
+
+2.  Also, maybe I could consider looking at interaction effects. Since the first two models were doing so well, I wanted to see what else I could learn from the four factors. Some that may have made some sense are effective field goal percentage and free throw rate. Three point attempts aren’t baked into the formula, but it would make sense that it plays some sort of role. 
+
+3.  I would fully center the quartic model so that I could have more confidence in my predictions.
+
+4.  I would look a little harder to find a dataset that had possessions, so that I could apply the first to models to a game-by-game basis. When looking at points per game, the four factors did not perform nearly as well.
+
+5.  Lastly, an idea that I may explore for a project in the future is if there are any differences from the regular season to the playoffs. Maybe it’s just because it’s that time of year and the playoffs are on my mind, but that’s always something that’s been talked about in NBA spaces.
+
+#### PROBLEMS WITH NORMALITY (Robust Regression Attempt):
+
+It is clear that both of these methods do not provide me with normally distributed errors, and therefore cannot be used. Because of this, I will attempt a robust logistic regression of the differential using the \`robust\` package.
+
+```{r robust_regression_attempt}
+set.seed(051024) 
+training.sample_robust <- reg_team_winpred_diff$team_winner.x %>%    caret::createDataPartition(p = 0.8, list = FALSE) 
+
+train.data_robust  <- reg_team_winpred_diff[training.sample_robust, ]
+
+test.data_robust <- reg_team_winpred_diff[-training.sample_robust, ] 
+
+four_factors_win_diff_rubust <- robust::glmRob(team_winner.x ~ efg_diff + tov_diff + orb_diff + ftr_diff, family = "binomial", data = train.data_robust)
+
+robust::summary.glmRob(four_factors_win_diff_rubust) 
+# 
+
+
+# probabilities_robust <- four_factors_win_diff_rubust %>% predict(test.data_robust, type = "response")
+# 
+# predicted.classes_robust <- ifelse(probabilities_robust > 0.5, 1, 0)
+# 
+# mean(predicted.classes_robust == test.data_robust$team_winner.x)  
+#doesn't work
+
+robust::plot.glmRob(four_factors_win_diff_rubust)
+
+vif(four_factors_win_diff_rubust)
+```
+
+In theory, this should deal with the normality, but the accuracy remains the same. If I had more time, I would spend more time improving the prediction accuracy in relation to normality.
