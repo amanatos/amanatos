@@ -5,3 +5,4 @@
 - 📫 How to reach me: amanatos@villanova.edu
 - 😄 Pronouns: He/Him/His
 
+On this repository, I have projects I have worked on in my classes at Villanova University. 
