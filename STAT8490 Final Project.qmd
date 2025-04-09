@@ -1,0 +1,93 @@
+---
+title: "STAT 8490 Final Project"
+author: "Andy Manatos"
+format: html
+editor: visual
+---
+
+## setup
+
+```{r setup}
+library(tidyverse)
+library(ggplot2)
+library(nflreadr)
+```
+
+
+
+## Data cleaning
+
+```{r data}
+s24 <- nflreadr::load_pbp(seasons = 2024)
+
+s24rp <- s24 %>% 
+  filter(play_type %in% c("run", "pass"),
+         two_point_attempt == 0) %>% 
+  select(play_id, down, ydstogo, posteam, yardline_100, half_seconds_remaining, game_seconds_remaining, shotgun, no_huddle, goal_to_go, posteam_timeouts_remaining, score_differential, play_type)
+
+write.csv(s24rp, "s24rp.csv")
+
+
+
+s24pfg <- s24 %>% 
+  filter(play_type %in% c("run", "pass", "punt", "field_goal"), 
+         two_point_attempt == 0) %>% 
+  select(play_id, down, ydstogo, posteam, yardline_100, half_seconds_remaining, game_seconds_remaining, shotgun, no_huddle, goal_to_go, posteam_timeouts_remaining, score_differential, play_type)
+
+
+#added goal_to_go, posteam_timeouts_remaining
+#got rid of two point conversion attempts, missing values for down
+
+write.csv(s24pfg, "s24pfg.csv")
+
+```
+
+
+Classes of full dataset
+
+```{r structure}
+s24 %>% 
+  group_by(play_type) %>% 
+  summarise(count = n())
+```
+
+Looking at punts and field goals
+
+```{r s24_pfg}
+s24pfg %>% 
+  mutate(down4 = ifelse(down == 4, 1, 0)) %>% 
+  group_by(play_type) %>% 
+  summarise(down4_pct = mean(down4)) 
+
+#na, do we have to get rid of 2pt conversions
+
+sum(is.na(s24pfg$down))
+
+#147 where down is NA, all on runs and passes
+```
+
+Getting rid of NA's: do they have anything in common?
+
+Guess: 2-point conversion attempts
+
+```{r na_analysis}
+s24na <- s24pfg %>% 
+  filter(is.na(down)) 
+
+ggplot(s24na) + geom_histogram(aes(x = yardline_100))
+
+#everything from 1 and 2 yardline, looks to be all 2 point attempts
+#who went for 2 from the 15???
+#some from the 7 (makes sense - 5 yard penalty)
+
+
+s24 %>% 
+  filter(play_type %in% c("run", "pass")) %>% 
+  mutate(down_na = ifelse(is.na(down), 1, 0)) %>% 
+  group_by(down_na) %>% 
+  summarise(twopa = mean(two_point_attempt))
+
+#all occurences when down is NA occur on 2 point conversion attempts
+
+```
+

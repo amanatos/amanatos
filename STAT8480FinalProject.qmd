@@ -1,0 +1,1458 @@
+---
+title: "Trying to Predict the 2024 NFL Playoffs"
+format: html
+author: "Andy Manatos"
+date: "12/19/2024"
+editor: visual
+---
+
+This contains what I discussed in my report, as well as various other explorations.
+
+## Data Collection: NFL Play-By-Play Data
+
+In this project, we will use the play-by-play data in the `nflreadr` package, wich loads data from the nflverse repository.
+
+```{r setup}
+suppressPackageStartupMessages(library(tidyverse)) 
+suppressPackageStartupMessages(library(nflreadr))
+library(boot)
+library(tree)
+library(e1071)
+library(glmnet)
+library(randomForest)
+library(gam)
+set.seed(8480)
+```
+
+## Data Pre-Processing: Offense
+
+```{r data}
+#SEASON24_15 WILL BE DIFFERENT FROM PRESENTATION
+
+#14 Weeks vs 15 weeks
+season24 <- nflreadr::load_pbp(seasons = 2024) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result) &
+           week < 15) %>% 
+      mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(posteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count)
+
+season23 <- nflreadr::load_pbp(seasons = 2023) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result)) %>% 
+        mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(posteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count) %>% 
+  mutate(playoffs = ifelse(posteam %in% c("CLE", "HOU", "MIA", "KC", "PIT", "BUF", "BAL", "PHI", "TB", "LA", "DET", "GB", "DAL", "SF"), 1, 0))
+
+season22 <- nflreadr::load_pbp(seasons = 2022) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result)) %>% 
+        mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(posteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count) %>% 
+  mutate(playoffs = ifelse(posteam %in% c("CIN", "LAC", "MIA", "KC", "JAX", "BUF", "BAL", "PHI", "TB", "MIN", "NYG", "SEA", "DAL", "SF"), 1, 0))
+
+season21 <- nflreadr::load_pbp(seasons = 2021) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result)) %>% 
+        mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(posteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count) %>% 
+  mutate(playoffs = ifelse(posteam %in% c("CIN", "LVR", "NE", "KC", "PIT", "BUF", "TEN", "PHI", "TB", "ARI", "LA", "SEA", "DAL", "SF"), 1, 0))
+
+season20 <- nflreadr::load_pbp(seasons = 2020) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result)) %>% 
+    mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(posteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count) %>% 
+  mutate(playoffs = ifelse(posteam %in% c("CLE", "PIT", "TEN", "KC", "IND", "BUF", "BAL", "GB", "TB", "WAS", "LAR", "SEA", "CHI", "NO"), 1, 0))
+
+
+# conference = ifelse(posteam %in% c("IND", "JAX", "HOU", "TEN", "NYJ", "NE", "BUF", "MIA", "PIT", "BAL", "CIN", "CLE", "KC", "LVR", "LAC", "DEN"), "AFC", "NFC")
+# # division = case_when(
+# # posteam %in% c("IND", "JAX", "HOU", "TEN") ~ "AFC South",
+# posteam %in% c("NYJ", "NE", "BUF", "MIA") ~ "AFC East",
+# # posteam %in% c("PIT", "BAL", "CIN", "CLE") ~ "AFC North",
+# # posteam %in% c("KC", "LVR", "LAC", "DEN") ~ "AFC West",
+# posteam %in% c("ATL", "TB", "CAR", "NO") ~ "NFC South",
+# # posteam %in% c("WAS", "DAL", "PHI", "NYG") ~ "NFC East",
+# # posteam %in% c("GB", "DET", "CHI", "MIN") ~ "NFC North",
+# # posteam %in% c("SEA", "SF", "ARI", "LAR") ~ "NFC West", )
+# # # )
+
+#this data will have results from week 15 as well
+season24_15 <- nflreadr::load_pbp(seasons = 2024) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result)) %>% 
+      mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(posteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count)
+
+
+
+
+```
+
+## Data Pre-Processing: Defense
+
+```{r data_def}
+season24def <- nflreadr::load_pbp(seasons = 2024) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result) & 
+           week < 15) %>% 
+      mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(defteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count)
+
+season23def <- nflreadr::load_pbp(seasons = 2023) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result)) %>% 
+        mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(defteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count) %>% 
+  mutate(playoffs = ifelse(defteam %in% c("CLE", "HOU", "MIA", "KC", "PIT", "BUF", "BAL", "PHI", "TB", "LAR", "DET", "GB", "DAL", "SF"), 1, 0))
+
+season22def <- nflreadr::load_pbp(seasons = 2022) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result)) %>% 
+        mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(defteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count) %>% 
+  mutate(playoffs = ifelse(defteam %in% c("CIN", "LAC", "MIA", "KC", "JAX", "BUF", "BAL", "PHI", "TB", "MIN", "NYG", "SEA", "DAL", "SF"), 1, 0))
+season21def <- nflreadr::load_pbp(seasons = 2021) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result)) %>% 
+        mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(defteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count) %>% 
+  mutate(playoffs = ifelse(defteam %in% c("CIN", "LVR", "NE", "KC", "PIT", "BUF", "TEN", "PHI", "TB", "ARI", "NYG", "SEA", "DAL", "SF"), 1, 0))
+season20def <- nflreadr::load_pbp(seasons = 2020) %>% 
+  filter(play_type %in% c("run", "pass") & 
+         is.na(two_point_conv_result)) %>% 
+    mutate(on_schedule = ifelse((down == 1 & ydstogo <= 9) | (down == 2 & ydstogo <= 6) | (down == 3 & ydstogo <= 3), 1, 0), 
+           tfl = ifelse(play_type == "run" & yards_gained < 0, yes = 1, no = 0),
+            defensive_penalty = ifelse(penalty == 1 & yards_gained > 0, 1, 0)) %>% 
+  group_by(defteam) %>% 
+  summarize(epa_per_play = mean(epa), 
+            sack_count = sum(sack),
+            play_count = n(),
+            run_count = sum(play_type == "run"),
+            pass_count = sum(play_type == "pass"),
+            third_down_plays = sum(down == 3),
+            sack_per_pass = sack_count / pass_count,
+            on_schedule_rate = sum(on_schedule) / play_count,
+            tfl_rate = sum(tfl) / run_count,
+            no_huddle_rate = sum(no_huddle) / play_count,
+            first_down_rate = sum(first_down) / play_count,
+            third_down_conversion_rate = sum(third_down_converted) / third_down_plays,
+            def_penalty_rate = sum(defensive_penalty) / play_count) %>% 
+  mutate(playoffs = ifelse(defteam %in% c("CLE", "PIT", "TEN", "KC", "IND", "BUF", "BAL", "GB", "TB", "WAS", "LAR", "SEA", "CHI", "NO"), 1, 0))
+
+
+# conference = ifelse(posteam %in% c("IND", "JAX", "HOU", "TEN", "NYJ", "NE", "BUF", "MIA", "PIT", "BAL", "CIN", "CLE", "KC", "LVR", "LAC", "DEN"), "AFC", "NFC")
+# # division = case_when(
+# # posteam %in% c("IND", "JAX", "HOU", "TEN") ~ "AFC South",
+# posteam %in% c("NYJ", "NE", "BUF", "MIA") ~ "AFC East",
+# # posteam %in% c("PIT", "BAL", "CIN", "CLE") ~ "AFC North",
+# # posteam %in% c("KC", "LVR", "LAC", "DEN") ~ "AFC West",
+# posteam %in% c("ATL", "TB", "CAR", "NO") ~ "NFC South",
+# # posteam %in% c("WAS", "DAL", "PHI", "NYG") ~ "NFC East",
+# # posteam %in% c("GB", "DET", "CHI", "MIN") ~ "NFC North",
+# # posteam %in% c("SEA", "SF", "ARI", "LAR") ~ "NFC West", )
+# # # )
+
+
+```
+
+## Data Pre-Processing: Differential
+
+```{r data_diff}
+season24_diff <- full_join(season24, season24def, by = c("posteam" = "defteam")) %>% 
+  group_by(posteam) %>% 
+  summarise(epa_diff = epa_per_play.x - epa_per_play.y,
+            sack_per_pass_diff = sack_per_pass.x - sack_per_pass.y,
+            on_schedule_rate_diff = on_schedule_rate.x - on_schedule_rate.y,
+            tfl_diff = tfl_rate.x - tfl_rate.y, 
+            no_huddle_diff = no_huddle_rate.x
+- no_huddle_rate.y,
+            first_down_diff = first_down_rate.x - first_down_rate.y,
+            third_down_diff = third_down_conversion_rate.x
+ - third_down_conversion_rate.y)
+
+
+season23_diff <- full_join(season23, season23def, by = c("posteam" = "defteam")) %>% 
+  group_by(posteam) %>% 
+  summarise(epa_diff = epa_per_play.x - epa_per_play.y,
+            sack_per_pass_diff = sack_per_pass.x - sack_per_pass.y,
+            on_schedule_rate_diff = on_schedule_rate.x - on_schedule_rate.y,
+            tfl_diff = tfl_rate.x - tfl_rate.y, 
+            no_huddle_diff = no_huddle_rate.x
+- no_huddle_rate.y,
+            first_down_diff = first_down_rate.x - first_down_rate.y,
+            third_down_diff = third_down_conversion_rate.x
+ - third_down_conversion_rate.y, 
+playoffs = playoffs.x)
+
+season22_diff <- full_join(season22, season22def, by = c("posteam" = "defteam")) %>% 
+  group_by(posteam) %>% 
+  summarise(epa_diff = epa_per_play.x - epa_per_play.y,
+            sack_per_pass_diff = sack_per_pass.x - sack_per_pass.y,
+            on_schedule_rate_diff = on_schedule_rate.x - on_schedule_rate.y,
+            tfl_diff = tfl_rate.x - tfl_rate.y, 
+            no_huddle_diff = no_huddle_rate.x
+- no_huddle_rate.y,
+            first_down_diff = first_down_rate.x - first_down_rate.y,
+            third_down_diff = third_down_conversion_rate.x
+ - third_down_conversion_rate.y,
+playoffs = playoffs.x)
+
+season21_diff <- full_join(season21, season21def, by = c("posteam" = "defteam")) %>% 
+  group_by(posteam) %>% 
+  summarise(epa_diff = epa_per_play.x - epa_per_play.y,
+            sack_per_pass_diff = sack_per_pass.x - sack_per_pass.y,
+            on_schedule_rate_diff = on_schedule_rate.x - on_schedule_rate.y,
+            tfl_diff = tfl_rate.x - tfl_rate.y, 
+            no_huddle_diff = no_huddle_rate.x
+- no_huddle_rate.y,
+            first_down_diff = first_down_rate.x - first_down_rate.y,
+            third_down_diff = third_down_conversion_rate.x
+ - third_down_conversion_rate.y,
+playoffs = playoffs.x)
+
+```
+
+
+## Variables of Interest:
+
+
+### posteam:
+
+In the play-by-play data, `posteam` is the team that currently has possession of the football. I use it to group each team as their own and compute summary offensive statistics.
+
+### defteam:
+
+In the play-by-play data, `defteam` is the team that currently is on defense. I use it to group each team as their own and compute summary defensive statistics.
+
+
+### epa_per_play:
+
+EPA comes from expected points, which is an expected value. Given a bunch of factors such as down, distance, time on the clock, etc., what is the expected amount of points a team will score on this drive. EPA stands for expected points added, which means on a given play, how much did the team's expected points go up or down?
+
+### sack_count:
+
+A sack is when the quarterback is tackled behind the line of scrimmage for negative yardage on a play. From analysis in previous classes, I discovered that taking sacks on offense was very detrimental to the success of a drive. Sack_count gives the total amount of sacks an offense gave up during a season.
+
+### play_count:
+
+This gives the total amount of plays an offense ran this season. To make analysis less complicated, I have excluded punts, field goals, and two-point conversion attempts. Further exploration of the data will be necessary to include or exclude more plays.
+
+### pass_count:
+
+The amount of plays a team passed the ball.
+
+### run_count:
+
+The amount of plays a team ran the ball.
+
+### sack_per_pass:
+
+This gives the amount of sacks a team has given up, adjusting for the amount of times the team passed the ball. It would not make sense to include run plays in this statistic.
+
+### on_schedule_rate:
+
+This is the percentage of time a team is "on schedule," meaning they have put themselves in more advantageous situations to convert first downs. Further examination of the data will determine the exact criteria for teams being "on schedule." As of now, I included First down with 9 or less yards to go, second down with 6 or less yards to go, and third down with 3 or less yards to go.
+
+### tfl_rate:
+
+A TFL or "tackle for loss" occurs when a team runs the ball and is tackled behind the line of scrimmage for negative yardage. This variable gives the rate of this occurrence adjusting for the amount of times a team ran the ball. It would not make sense to include pass plays in this statistic.
+
+### no_huddle_rate:
+
+Before a play, a team huddles up to decide what play they are going to run. When they do not do this, it is classified as "no huddle." This measures the percentage of time a team does not huddle before a play. It is usually done to speed up the tempo of a game, or near the end of a half when there is not much time left. 
+
+### first_down_rate:
+
+In the NFL, a team gets 4 downs to move 10 yards down the field, if you cannot convert, the ball goes to the other team. First Down Rate measures the overall amount of First downs a team converts over their total amount of plays.
+
+
+### third_down_conversion_rate: 
+
+Most of the time, a team will punt the ball away to the other team on Fourth down in order to not risk giving the other team better field position, meaning Third down is extremely important to keep possession of the ball. Third Down Conversion Rate measures the amount of times a team gets a First down on Third down plays.
+
+### defensive_penalty_rate: 
+
+A penalty occurs when a team is caught doing something against the rules. Defensive penalties include a gain of yardage for the offense, or an automatic first down for the offense. This measures the amount of defensive penalties an offense is awarded per play. 
+
+### playoffs (Response Variable)
+
+This is a binary variable that keeps track of which teams made the playoffs in a given season. This will used either as a factor or as a numeric. 
+
+## Early Model Development and Exploration Using 2020 Season
+
+To start, we will evaluate the performance of each individual variable in predicting playoff teams, using the 2020 season. Additionally, we will perform stepwise regression with all variables present. To evaluate these models, we will use k-fold cross-validation (k = 5).
+
+
+```{r models}
+glm_epa <- glm(playoffs ~ epa_per_play, data = season20, 
+               family = binomial)
+summary(glm_epa)
+glm_sack <- glm(playoffs ~ sack_per_pass, data = season20, 
+               family = binomial)
+summary(glm_sack)
+glm_onschedule <- glm(playoffs ~ on_schedule_rate, data = season20, 
+               family = binomial)
+summary(glm_onschedule)
+glm_tfl <- glm(playoffs ~ tfl_rate, data = season20, 
+               family = binomial)
+summary(glm_tfl)
+
+cv.glm(season20, glm_epa, K = 5)$delta[1]
+#0.180
+cv.glm(season20, glm_sack, K = 5)$delta[1]
+#0.211
+cv.glm(season20, glm_onschedule, K = 5)$delta[1]
+#0.234
+cv.glm(season20, glm_tfl, K = 5)$delta[1]
+#0.260
+
+```
+
+Based on predicting playoff teams with each of the four variables by themselves `epa_per_play` had the lowest test error of 0.179. We would like to improve on this. We will use forward selection, starting from a null model.
+
+```{r aic_model}
+glm_null <- glm(playoffs ~ 1, data = season20, 
+                family = binomial)
+
+MASS::stepAIC(glm_null, scope = ~ epa_per_play + sack_per_pass + tfl_rate + on_schedule_rate, direction = "forward")
+
+glm_aic <- glm(formula = playoffs ~ epa_per_play + sack_per_pass, family = binomial, 
+    data = season20)
+summary(glm_aic)
+cv.glm(season20, glm_aic, K = 5)$delta[1]
+
+#0.168
+
+```
+
+Through using forward selection from our four initial variables of interest, we added `epa_per_play` and `sack_per_pass`. This lowered our lowest test error from 0.180 to 0.168.
+
+
+## Discussion
+
+Through using the 2020 season, we have found two good predictors for playoff teams, and had a test error of 0.168. I would like this number to be much lower. Moving forward, I will create a model that includes the all four of the previous seasons to use on the current NFL season. As stated before, further exploration of the data will allow me to include or exclude plays based on relevancy. Additionally, I will explore a wider range of variables and methods to yield the lowest possible test error.
+
+One complication moving forward in predicting the current season's playoff teams is the playoff format. In the NFL, there are two conferences with four divisions each. Since the 2020 season, 7 teams from each conference make the playoffs, with the division winners being guaranteed a spot. Then, the next three teams with the highest records will be in contention. In order to predict an accurate set of NFL teams, the playoff format will have to be considered in the model.
+
+### Other initial considerations
+
+I am considering predicting each individual game giving each team a predicted win total. Also, I am debating on whether or not to include the 2020 season, as this was the beginning of the 14-team playoff format, but there were still only 16 regular season games. Starting in 2021, the NFL added a 17th regular season game. Thus, the importance of that extra game must be considered.
+
+### Another approach to get the criteria I want: 
+
+I will treat the 0-1 binary as a numeric or as a factor, and the predicted playoff teams will be those with the highest predicted values according to the criteria.
+
+## Selecting Different Training and Validation Sets
+
+With this data, I will use the most recent complete season (2023) as my validation set, and I will follow the same process with different training sets. First I will use just the 2022 season, then both the 2022 and 2021 seasons, and so on. I will see if more information helps prediction accuracy. In addition, I will start with stepwise logistic regression to get variables of interest, then try a variety of different models to lower test error.
+
+### Using `season22` as the training set:
+
+```{r season22_logistic}
+glm_null22 <- glm(playoffs ~ 1, data = season22, 
+                family = binomial)
+
+# MASS::stepAIC(glm_null22, scope = ~ epa_per_play + sack_per_pass + tfl_rate + on_schedule_rate + no_huddle_rate + third_down_conversion_rate + first_down_rate + def_penalty_rate, direction = "forward")
+
+glm_aic22 <- glm(formula = playoffs ~ first_down_rate + def_penalty_rate + 
+    tfl_rate, family = "binomial", data = season22)
+
+
+cv.glm(season23, glm_aic22, K = 5)$delta[1]
+#0.231
+
+```
+
+### Using `season21` and `season22` as the training set:
+
+```{r season21and22}
+seasons2122 <- rbind(season22, season21)
+
+glm_null2122 <- glm(playoffs ~ 1, data = seasons2122, 
+                family = binomial)
+
+# MASS::stepAIC(glm_null2122, scope = ~ epa_per_play + sack_per_pass + tfl_rate + on_schedule_rate + no_huddle_rate + third_down_conversion_rate + first_down_rate + def_penalty_rate, direction = "forward")
+
+glm_aic_2122 <- glm(formula = playoffs ~ third_down_conversion_rate + no_huddle_rate + 
+    tfl_rate + epa_per_play, family = binomial, data = seasons2122)
+summary(glm_aic_2122)
+cv.glm(season23, glm_aic_2122, K = 5)$delta[1]
+#0.215
+#a little better!
+
+glm_full_2122 <- glm(playoffs~ epa_per_play + sack_per_pass + tfl_rate + on_schedule_rate + no_huddle_rate + third_down_conversion_rate + first_down_rate + def_penalty_rate, data = seasons2122)
+cv.glm(season23, glm_full_2122, K = 5)$delta[1]
+#0.267, aic model does better
+
+```
+
+
+### Using the last three seasons as the training set:
+
+```{r seasons20_21_22}
+seasons202122 <- rbind(season22, season21, season20)
+
+glm_null202122 <- glm(playoffs ~ 1, data = seasons202122, 
+                family = binomial)
+
+# MASS::stepAIC(glm_null202122, scope = ~ epa_per_play + sack_per_pass + tfl_rate + on_schedule_rate + no_huddle_rate + third_down_conversion_rate + first_down_rate + def_penalty_rate, direction = "forward")
+
+glm_aic_202122 <- glm(formula = playoffs ~ epa_per_play + tfl_rate + third_down_conversion_rate + 
+    no_huddle_rate + first_down_rate, family = binomial, data = seasons202122)
+summary(glm_aic_202122)
+cv.glm(season23, glm_aic_202122, K = 5)$delta[1]
+#0.237
+#a little worse, move forward with 2122
+
+```
+
+Using logistic regression, more information was helpful to an extent. Through using stepwise regression, the models with more information used more variables when a simpler model may be in order. I will now try to use different methods to lower the test error using the 2022 dataset, but going back to the full scope of variables.
+
+
+### LDA:
+
+```{r lda}
+#full scope
+lda22 <- MASS::lda(playoffs ~ epa_per_play + sack_per_pass + tfl_rate + on_schedule_rate + no_huddle_rate + third_down_conversion_rate + first_down_rate + def_penalty_rate, 
+                 data = season22) 
+
+mypredlda22 <- predict(lda22, season23)
+
+table(mypredlda22$class, season23$playoffs)
+(4+2)/32
+#0.1875
+
+#using reduced model from stepwise
+
+
+lda22_aic <- MASS::lda(playoffs ~ first_down_rate + def_penalty_rate + 
+    tfl_rate, 
+                 data = season22) 
+
+mypredlda22_aic <- predict(lda22_aic, season23)
+
+table(mypredlda22_aic$class, season23$playoffs)
+#same results, 
+#6/32
+
+
+lda2122 <- MASS::lda(playoffs ~ epa_per_play + sack_per_pass + tfl_rate + on_schedule_rate + no_huddle_rate + third_down_conversion_rate + first_down_rate + def_penalty_rate, 
+                 data = seasons2122) 
+
+
+mypredlda2122 <- predict(lda2122, season23)
+
+table(mypredlda2122$class, season23$playoffs)
+#7/32
+
+lda2122_aic <- MASS::lda( playoffs ~ third_down_conversion_rate + no_huddle_rate + 
+    tfl_rate + epa_per_play, 
+                 data = seasons2122) 
+summary(lda22_aic)
+
+mypredlda2122_aic <- predict(lda2122_aic, season23)
+
+table(mypredlda2122_aic$class, season23$playoffs)
+#7/32
+
+#season22 slightly better
+
+```
+
+Here, the full scope and stepwise model gave the same results.
+
+### Let's Try QDA
+
+```{r season2122_qda}
+#full scope
+qda22 <- MASS::qda(playoffs ~ epa_per_play + sack_per_pass + tfl_rate + on_schedule_rate + no_huddle_rate + third_down_conversion_rate + first_down_rate + def_penalty_rate, 
+                 data = season22) 
+
+mypredqda22 <- predict(qda22, season23)
+
+table(mypredqda22$class, season23$playoffs)
+(4+1)/32
+#0.15625
+
+#using reduced model from stepwise
+
+
+qda22_aic <- MASS::qda(playoffs ~ first_down_rate + def_penalty_rate + 
+    tfl_rate, 
+                 data = season22) 
+
+mypredqda22_aic <- predict(lda22_aic, season23)
+
+table(mypredqda22_aic$class, season23$playoffs)
+#same results, 
+6/32
+
+
+
+qda2122 <- MASS::qda(playoffs ~ epa_per_play + sack_per_pass + tfl_rate + on_schedule_rate + no_huddle_rate + third_down_conversion_rate + first_down_rate + def_penalty_rate, 
+                 data = seasons2122) 
+
+
+mypredqda2122 <- predict(qda2122, season23)
+
+table(mypredqda2122$class, season23$playoffs)
+#9/32
+
+#using reduced model from stepwise
+
+
+qda2122_aic <- MASS::qda( playoffs ~ third_down_conversion_rate + no_huddle_rate + 
+    tfl_rate + epa_per_play, 
+                 data = seasons2122) 
+
+mypredqda2122_aic <- predict(qda2122_aic, season23)
+
+table(mypredqda2122_aic$class, season23$playoffs)
+#same results, 
+8/32
+```
+
+Here, the full scope model performs slightly worse with the 2021 and 2022 seasons. 
+
+### Let's Try KNN
+
+```{r knn_season2122}
+season22_knn <- season22 %>% 
+  select(posteam, epa_per_play, sack_per_pass, on_schedule_rate, tfl_rate, no_huddle_rate, first_down_rate, third_down_conversion_rate, def_penalty_rate, playoffs)
+
+season22_knn_aic <- season22 %>% 
+  select(posteam, first_down_rate, def_penalty_rate,  
+    tfl_rate, playoffs)
+
+season23_knn_aic <- season22 %>% 
+  select(posteam, first_down_rate, def_penalty_rate,  
+    tfl_rate, playoffs)
+
+season23_knn <- season23 %>% 
+  select(posteam, epa_per_play, sack_per_pass, on_schedule_rate, tfl_rate, no_huddle_rate, first_down_rate, third_down_conversion_rate, def_penalty_rate, playoffs)
+
+season24_knn <- season24 %>% 
+  select(posteam, epa_per_play, sack_per_pass, on_schedule_rate, tfl_rate, no_huddle_rate, first_down_rate, third_down_conversion_rate, def_penalty_rate)
+
+
+
+#full_scope
+
+knn22 <- class::knn(train = season22_knn[,2:9], test = season23_knn[,2:9], cl = season22_knn$playoffs, k = 16)
+
+
+table(knn22, season23_knn$playoffs)
+#k = 10, 6/32
+#k = 5, 8/32
+#k = 14, 5/32 one false positive
+#k = 15, 5/32, one false positive
+#k = 16, 5/32, 0 false positives!
+#k = 17, 5/32, 0 false positives
+#k = 18, 5/32, no false positives
+
+#move forward with k = 16
+#use smaller scope
+
+knn22_aic <- class::knn(train = season22_knn_aic[,2:4], test = season23_knn_aic[,2:4], cl = season22_knn$playoffs, k = 16)
+
+table(knn22_aic, season23_knn$playoffs)
+#14/32, k = 5
+
+#full scope seems to be doing better again
+
+
+#try season2122
+
+seasons2122_knn <- seasons2122 %>% 
+  select(posteam, epa_per_play, sack_per_pass, on_schedule_rate, tfl_rate, no_huddle_rate, first_down_rate, third_down_conversion_rate, def_penalty_rate, playoffs)
+
+
+knn2122 <- class::knn(train = seasons2122_knn[,2:9], test = season23_knn[,2:9], cl = seasons2122_knn$playoffs, k = 15)
+
+table(knn2122, season23_knn$playoffs)
+#7/32, k = 5
+#7/32, k = 10
+#5/32, k = 15
+#7/32, k = 16,
+#6/32, k = 20, 0 false positives
+
+
+```
+
+
+### Let's Try Classification Trees
+
+```{r season2122_tree}
+#full scope
+
+season22_tree <- season22_knn %>% 
+  mutate(playoffs = as.factor(ifelse(playoffs == 1,"Yes","No")))
+season23_tree <- season23_knn %>% 
+  mutate(playoffs = as.factor(ifelse(playoffs == 1,"Yes","No")))
+seasons2122_tree <- seasons2122_knn %>% 
+  mutate(playoffs = as.factor(ifelse(playoffs == 1,"Yes","No")))
+
+
+tree22 <- tree(playoffs~. - posteam, data = season22_tree)
+summary(tree22)
+
+#training error rate of 4/32
+
+plot(tree22)
+text(tree22, pretty = 0)
+
+treepred22 <- predict(tree22, newdata = season23_tree, type = "class")
+table(treepred22,season23_tree$playoffs)
+#9/32 for test error
+
+cv.tree22 <- cv.tree(tree22,FUN=prune.misclass)
+
+plot(cv.tree22$size,cv.tree22$dev,type="b")
+plot(cv.tree22$k,cv.tree22$dev,type="b")
+
+#let's use 2, argument for 4
+
+prune.tree22 <- prune.misclass(tree22,best=2)
+plot(prune.tree22)
+text(prune.tree22,pretty=0)
+
+treepred22_prune <- predict(prune.tree22,season23_tree,type="class")
+table(treepred22_prune,season23_tree$playoffs)
+#6/32 using pruned tree
+
+tree2122 <- tree(playoffs~. - posteam, data = seasons2122_tree)
+summary(tree2122)
+#training error of 4/64
+
+plot(tree2122)
+text(tree2122, pretty = 0)
+#7 terminal nodes
+
+treepred2122 <- predict(tree2122, newdata = season23_tree, type = "class")
+table(treepred2122,season23_tree$playoffs)
+#test error of 12/32
+
+cv.tree2122 <- cv.tree(tree2122,FUN=prune.misclass)
+
+plot(cv.tree2122$size,cv.tree2122$dev,type="b")
+plot(cv.tree2122$k,cv.tree2122$dev,type="b")
+
+#let's use 2 still, argument for using 5
+
+prune.tree2122 <- prune.misclass(tree2122,best=2)
+plot(prune.tree2122)
+text(prune.tree2122,pretty=0)
+
+treepred2122_prune <- predict(prune.tree2122,season23_tree,type="class")
+table(treepred2122_prune,season23_tree$playoffs)
+
+#Test error of 4/32, best so far. Maybe let's do a regression tree
+
+```
+
+### Let's Try Bagging/Random Forests
+
+```{r random_forests_2122}
+#8 predictors, use mtry = 3
+
+bag_season22 <- randomForest(playoffs~. - posteam,data= season22_tree, mtry = 3, ntree = 1000)
+bag_season22
+#training error of 9/32, 500 trees
+#training error of 9/32, 1000 trees
+
+yhat_bag22  <- predict(bag_season22,newdata=season23_tree, type = "class")
+table(yhat_bag22,season23_tree$playoffs)
+#test error of 4/32!! ties tree
+#test error of 4/32 with 1000 trees
+
+rf_season22 <- randomForest(playoffs~. - posteam,data= season22_tree, mtry = 3, importance = T)
+rf_season22
+#training error of 9/32
+
+yhat_rf22  <- predict(rf_season22,newdata=season23_tree, type = "class")
+table(yhat_rf22,season23_tree$playoffs)
+#test error of 4/32!! 
+# importance(rf_season22)
+
+
+rf_season2122 <- randomForest(playoffs~. - posteam,data= seasons2122_tree, mtry = 3, importance = T)
+rf_season2122
+#training error of 14/64
+
+yhat_rf2122  <- predict(rf_season2122,newdata=season23_tree, type = "class")
+table(yhat_rf2122,season23_tree$playoffs)
+#test error of 4/32!! 0 false positives, but no improvement from season22
+ 
+varImpPlot(rf_season2122)
+
+#top 4 variables are the same in each plot:
+#epa_per_play, third_down_conversion_rate, first_down_rate, and no_huddle_rate
+
+
+```
+
+
+### Predicting `season23` using bagging: 
+
+```{r predicting_bagging_23}
+bag_seasons2122 <- randomForest(playoffs~. - posteam,data= seasons2122_knn %>% mutate(playoffs = as.factor(playoffs)), mtry = 3, ntree = 1000)
+bag_seasons2122
+#training error of 13/64 with 1000 trees
+
+
+yhat_bag2122  <- predict(bag_seasons2122,newdata=season23_tree, type = "class")
+#test error  4/32 with 1000 trees, 0 false positives
+
+season23pred_bagging2122 <- season23 %>% 
+  select(posteam, playoffs) %>% 
+  mutate(playoff_pred_value = yhat_bag2122)
+
+#this model actually doesn't label any false positives
+#it just misses cleveland, Tampa Bay, Pittsburgh, and Houston
+
+#Tampa bay and Houston seem to be the most commonly missed
+
+```
+
+### Predicting `season23` using Random Forests
+
+```{r predicting_rf_23}
+rf_season2122r <- randomForest(playoffs~. - posteam,data= seasons2122_knn, mtry = 3, ntree = 1000, importance = T)
+rf_season2122r
+
+#warning for random forest regression because playoffs is binary, run anyway. Maybe a better output value here would be amount of wins (0 to 17).
+
+yhat_rf2122r  <- predict(rf_season2122r,newdata=season23_knn, type = "response")
+
+season23pred_rf <- season23 %>% select(posteam, playoffs) %>% 
+  mutate(playoffs_pred_value = yhat_rf2122r) %>% 
+  arrange(desc(playoffs_pred_value))
+
+#500 trees
+#NFC div winners: PHI, SF, GB, NO
+#NFC wc: DAL, LA, DET
+
+#AFC div winners: BUF, KC, BAL, IND
+#AFC wc: MIA, LAC, CIN
+
+#error 8/32
+
+#1000 trees
+
+#NFC div: PHI, SF, GB, NO
+#NFC wc: DAL, LA, DET
+
+#aFC div: BUF, KC, BAL, IND 
+#afc wc: MIA, LAC, CIN
+
+#Error 8/32
+```
+
+### Using our BEST model to predict 2024!
+
+So far, our best test error that we have achieved is 4/32, both using Trees and Random Forests. 
+
+```{r prediction_for_2024}
+
+#bagging
+
+bagging24 <- predict(bag_seasons2122,newdata=season24_knn, type = "class")
+
+
+season24_predictions_bagging <- season24 %>% 
+  select(posteam) %>% 
+  mutate(playoffs = bagging24)
+
+sum(season24_predictions_bagging$playoffs == 1)
+
+#16 teams
+#too many, needs to be 7 and 7
+
+#nfc: ATL, DET, GB, PHI, SEA, SF, TB, WAS
+#minnesota glaring omission
+#afc: BAL, BUF, CIN, KC, PIT, 
+#lac, den, hou, probably missing 
+
+
+tree24 <- predict(prune.tree2122, newdata=season24_knn, type = "class") 
+
+
+season24_predictions_tree <- season24 %>% 
+  select(posteam) %>% 
+  mutate(playoffs = tree24)
+
+sum(season24_predictions_tree$playoffs == "Yes")
+#only 12 teams, also this is just based on one variable
+
+#NFC: ari, det, gb, phi, sf, tb, was
+#no MIN, once again a glaring omission
+#AFC: buf, bal, cin, kc
+#no PIT, lac, den, hou (but they're not good)
+
+
+```
+
+### Let's Try a Regression Tree to FORCE it to pick according to the playoff format.
+
+```{r regression_tree_2122}
+rtree2122 <- tree(playoffs~. - posteam, data = seasons2122_knn)
+summary(rtree2122)
+
+#i do not get the same warning running a regression tree
+
+#5 terminal nodes
+
+#resid mean deviance 0.088
+
+plot(rtree2122)
+text(rtree2122, pretty = 0)
+#different from classification 
+
+
+rtreepred2122 <- predict(rtree2122, newdata = season23_knn)
+
+rtree_predictions <- season23 %>% 
+  select(posteam, playoffs) %>% 
+  mutate(playoffs_pred_value = rtreepred2122) %>% 
+  arrange(desc(playoffs_pred_value))
+
+
+#AFC div winners: BAL, BUF/MIA, KC, IND
+#afc wc: BUF/MIA, (none left with value > 0)
+#NFC div winners: DAL/PHI, DET, LA/SF, TB
+#NFC wc: DAL/PHI, LA/SF, GB
+
+#the nfc is completely right?!?!?
+#AFC misses IND vs. HOU, this was decided in the last week of the season in a game between both teams
+#the AFC doesn't predict enough with a positive value, but only one incorrect prediction
+#before separating by conference, what if we prune?
+
+cv.rtree2122 <- cv.tree(rtree2122)
+
+plot(cv.rtree2122$size,cv.rtree2122$dev,type="b")
+plot(cv.rtree2122$k,cv.rtree2122$dev,type="b")
+
+#let's use 3, different from classification
+
+prune.rtree2122 <- prune.tree(rtree2122,best=3)
+
+plot(prune.rtree2122)
+text(prune.rtree2122,pretty=0)
+
+rtreepred2122_prune <- predict(prune.rtree2122,season23_tree)
+
+rtree_predictions_pruned <- season23 %>% 
+  select(posteam, playoffs) %>% 
+  mutate(playoffs_pred_value = rtreepred2122_prune) %>% 
+  arrange(desc(playoffs_pred_value))
+
+#AFC div winners: BAL, BUF/MIA, KC, IND
+#afc wc: BUF/MIA, 
+#NFC div winners: DAL/PHI, DET/GB, LA/SF, 
+#nfc wc: DET/GB, DAL/PHI
+
+#pruned tree still underpredicts because there's not enough terminal nodes, actually worse
+
+
+```
+
+
+```{r predicting_2024_rtree}
+rtree_predictions24 <- season24 %>% 
+  select(posteam) %>% 
+  mutate(playoffs_pred_value = predict(rtree2122, newdata = season24_knn)) %>% 
+  arrange(desc(playoffs_pred_value))
+
+#NFC div winners: ARI/SF, DET/GB, PHI/WAS, TB
+#NFC wc: DET/GB, PHI/WAS, ATL/CHI/SEA
+
+#AFC div winners: BAL/CIN/PIT, KC, BUF, (no afc south)
+#AFC WC: 2 of BAL/CIN/PIT, (no 7 seed)
+
+
+```
+
+### Predicting Season23 Using SVM Regression and Classification
+
+```{r season2122_svm}
+svmfit2122 <- svm(playoffs~ epa_per_play + sack_per_pass + on_schedule_rate + tfl_rate, data= seasons2122, kernel="radial",  gamma=0.1, cost=1)
+
+
+season23pred_svm <- season23  %>% 
+  select(posteam, playoffs) %>% 
+  mutate(playoffs_pred_value = predict(svmfit2122, season23, type= "response")) %>%  
+  arrange(desc(playoffs_pred_value)) 
+
+
+#nfc div winners: sf, dal, det, no
+#nfc wc: gb, la, phi
+#afc div winners: mia, kc, bal, jax
+#afc wc: buf, cin, hou
+
+#test error 6/32
+
+#let's explore svm more, 
+
+#new orleans and cincinnati keep getting predicted
+
+
+tune_out2122r <- tune(svm,playoffs~ epa_per_play + sack_per_pass + on_schedule_rate + tfl_rate, data= seasons2122,  kernel="radial",ranges=list(cost=c(0.001, 0.01, 0.1, 1,5,10,100)), gamma=c(0.5,1,2,3,4))
+summary(tune_out2122r)
+
+bestmod2122r <- tune_out2122r$best.model
+summary(bestmod2122r)
+
+
+
+#52 support vectors
+
+season23pred_svm <- season23  %>% 
+  select(posteam, playoffs) %>% 
+  mutate(playoffs_pred_value = predict(bestmod2122r, season23, type = "response")) %>%  
+  arrange(desc(playoffs_pred_value)) 
+
+#NFC div winners: 1 SF (12-5), 2 DAL (12-5), 3 DET (11-6), 4 NO (9-8)
+#nfc wc: 5 GB (9-8), 6 LA (10-7), 7 PHI (11-6)
+
+#next teams out: SEA (9-8), MIN (7-10), ARI (4-13)
+
+#missed NO (.410) vs. TB (.343), both teams finished 9-8 (TB won by tiebreaker)
+
+#AFC div winners: 1 BUF (11-6), 2 BAL (14-3), 3 KC (11-6), 4 HOU (10-7)
+#AFC wc: 5 MIA (11-6), 6 CIN (9-8), 7 JAX (9-8)
+#next teams out: PIT (10-7), DEN (8-9), TEN (6-11)
+
+#CLE is not regarded well in my models
+
+#test error of 6/32 (3 incorrect labels), although none are that crazy
+
+
+
+svmfit2122_class <- svm(playoffs~ epa_per_play + sack_per_pass + on_schedule_rate + tfl_rate, data= seasons2122 %>% mutate(playoffs = as.factor(playoffs)), kernel="radial",  gamma=0.1, cost=1)
+
+svmpred_class <- as.numeric(predict(svmfit2122_class, season23, type = "class")) - 1
+
+mean((svmpred_class - season23$playoffs)^2)
+
+
+#test error of 5/32
+
+
+#let's make this better
+
+
+tune_out2122 <- tune(svm,playoffs~ epa_per_play + sack_per_pass + on_schedule_rate + tfl_rate, data= seasons2122 %>% mutate(playoffs = as.factor(playoffs)),kernel="radial",ranges=list(cost=c(0.001, 0.01, 0.1, 1,5,10,100)), gamma=c(0.5,1,2,3,4))
+summary(tune_out2122)
+
+bestmod2122 <- tune_out2122$best.model
+summary(bestmod2122)
+
+# plot(formula = tuwne_out2122$best.model, seasons2122)
+
+svmpred2122best <- as.numeric(predict(bestmod2122, season23, type = "class")) - 1
+
+mean((svmpred2122best - season23$playoffs)^2)
+#worse!
+
+#tuned model did worse
+
+```
+
+
+### Predicting `season23` using logistic regression from `season22` (Through 14 games):
+
+```{r playoffspred_logistic}
+season23pred_logistic <- season23  %>% 
+  select(posteam, playoffs) %>% 
+  mutate(playoffs_pred_value = predict(glm_aic22, season23, type = "response")) %>%  
+  arrange(desc(playoffs_pred_value)) %>% 
+  mutate(playoffs_pred = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, rep(0, 15)))
+
+
+error_s23_log <- (season23pred_logistic$playoffs_pred - season23pred_logistic$playoffs)^2
+sum(error_s23_log)/32
+
+  
+#NFC division winners: SF, DET, PHI, NO
+#NFC wild card: ARI, GB, DAL, 
+
+#AFC division winners: BUF, CIN, KC, JAX
+#AFC wild card: MIA, BAL, PIT
+
+
+```
+
+### Predicting 2024 Playoffs with SVM (Through 14 Games)
+
+```{r svm_24_pred}
+season24pred_svm <- season24  %>% 
+  select(posteam) %>% 
+  mutate(playoffs_pred_value = predict(bestmod2122r, season24, type = "response")) %>%  
+  arrange(desc(playoffs_pred_value)) 
+
+#AFC div winners: DEN, CIN, BUF, HOU
+#AFC WC: PIT, BAL, MIA
+
+#next teams out: KC, NYJ, JAX
+
+#NFC div winners TB, DET, SF, WAS 
+#NFC WC: NO, MIN, GB
+
+#next teams out: LA, PHI, ATL
+
+
+```
+
+
+## Predicting 2024 Playoffs With Random Forests (Through 14 weeks)
+
+```{r predicting_2024_rf}
+
+
+season24pred_rf <- season24 %>% select(posteam) %>% 
+  mutate(playoffs_pred_value = predict(rf_season2122r,newdata=season24_knn, type = "response")) %>% 
+  arrange(desc(playoffs_pred_value))
+
+season24pred_rf
+
+#NFC div: PHI, SF, TB, MIN 
+#NFC wc: WAS, DET, ARI
+
+#GB first out
+
+#AFC div: CIN, KC, BUF, HOU
+#AFC wc: BAL, PIT, MIA
+
+#DEN first out
+
+```
+
+
+## FINAL PREDICTION AS OF 12/19/2024 (RF)
+
+```{r pred_121924}
+season24_knn15 <- season24_15 %>% 
+  select(posteam, epa_per_play, sack_per_pass, on_schedule_rate, tfl_rate, no_huddle_rate, first_down_rate, third_down_conversion_rate, def_penalty_rate) 
+
+
+season24pred_rf15 <- season24_15 %>% select(posteam) %>% 
+  mutate(playoffs_pred_value = predict(rf_season2122r,newdata=season24_knn15, type = "response")) %>% 
+  arrange(desc(playoffs_pred_value))
+
+season24pred_rf15
+
+#ran it again
+
+#PHI, MIN, SF, TB
+#WAS, ARI, DET
+
+#GB first out
+
+#KC, CIN, BUF, HOU
+#BAL, PIT, DEN
+
+
+```
+
+
+I will run this prediction a final time in January once the regular season is complete, and the playoffs are set in stone to truly evaluate how the model performed.
+
+
+## Prediction as of 1/6 2025
+
+Now that the regular season is complete, we will evaluate the true accuracy of this model. 
+
+
+```{r pred_01062025}
+season24_knn15 <- season24_15 %>% 
+  select(posteam, epa_per_play, sack_per_pass, on_schedule_rate, tfl_rate, no_huddle_rate, first_down_rate, third_down_conversion_rate, def_penalty_rate) 
+
+
+season24pred_rf15 <- season24_15 %>% select(posteam) %>% 
+  mutate(playoffs_pred_value = predict(rf_season2122r,newdata=season24_knn15, type = "response")) %>% 
+  arrange(desc(playoffs_pred_value))
+
+season24pred_rf15
+
+#NFC:
+#div: was, det, ari, atl
+#wc: phi, sf, gb
+
+#first out: tb, min, la
+
+#AFC
+#div: kc, cin, buf, jax (oh no)
+#wc: bal, lac, den
+
+#first out: pit, mia, nyj
+
+#houston not regarded well at all
+```
+
+
+## Other explorations:
+
+
+### Let's Try GAM
+
+```{r gam2122}
+gam2122 <- gam(playoffs ~ s(epa_per_play, df = 1) + s(sack_per_pass, df = 1) + s(tfl_rate, df = 1) + s(on_schedule_rate, df = 1) + s(no_huddle_rate, df = 1) + s(third_down_conversion_rate, df = 1) + s(first_down_rate, df = 1) + s(def_penalty_rate, df = 1), 
+           data = seasons2122)
+# plot(gam2122,  se = TRUE, col = "blue" )
+summary(gam2122)
+
+gampred2122 <- predict(gam2122, 
+                newdata = season23)
+gampred2122
+
+
+pred2023_gam <- season23 %>% 
+  select(posteam, playoffs) %>% 
+  mutate(playoffs_pred_value = gampred2122) %>% 
+  arrange(desc(playoffs_pred_value))
+  
+#nfc div win: sf, dal, gb,tb 
+#nfc wc: phi, la, sea
+
+#afc div win: buf, bal, kc, hou 
+#afc wc: mia, jax, cin
+
+#test error 6/32
+
+```
+
+
+### Let's Try Lasso
+
+```{r season22_lasso}
+X1222 <- model.matrix(playoffs ~ . - posteam, data = seasons2122_knn)[, -1]
+y1222 <- seasons2122$playoffs
+
+X23 <- model.matrix(playoffs ~ . - posteam, data = season23_knn)[, -1]
+
+model_lasso_cv1222 <- cv.glmnet(X1222, y1222, alpha = 1)
+model_lasso_cv1222
+
+plot(model_lasso_cv1222)
+
+sum(abs(coef(model_lasso_cv1222)[-1])) 
+
+
+#predicting season23 using regression
+
+season23pred_lasso <- season23 %>% 
+  select(posteam, playoffs) %>% 
+  mutate(playoffs_pred_value = predict(model_lasso_cv1222, X23, type = "response")[,1]) %>% 
+  arrange(desc(playoffs_pred_value))
+
+#NFC div winners: SF, det, dal, no
+#NFC wc: phi, gb, la
+
+#AFC div winners: BUF, kc, bal, hou
+#AFC wc: mia, cin, den
+
+#6/32
+
+
+```
+
+### Trying Different Classification
+
+Here, I will separate division winners from wild card teams to see if this improves prediction accuracy. 
+
+```{r data_with_diff_classification}
+season23c <- season23 %>% 
+  mutate(playoffs = ifelse(posteam %in% c("CLE", "HOU", "KC", "BUF", "BAL",  "TB", "DET", "DAL", "SF"), "div_winner", ifelse(posteam %in% c("CLE", "MIA", "PIT", "PHI", "LA", "GB"), "wc", "no"))) %>% 
+  mutate(playoffs = as.factor(playoffs))
+
+season22c <- season22 %>% 
+  mutate(playoffs = ifelse(posteam %in% c("CIN", "KC", "JAX", "BUF", "PHI", "TB", "MIN", "SF"), "div_winner", ifelse(posteam %in% c("LAC", "MIA", "BAL", "NYG", "SEA", "DAL"), "wc", "no"))) %>% 
+  mutate(playoffs = as.factor(playoffs))
+
+season21c <- season21 %>% 
+  mutate(playoffs = ifelse(posteam %in% c("CIN", "KC", "TEN", "BUF", "DAL", "TB", "GB", "LA"), "div_winner", ifelse(posteam %in% c("NE", "LVR", "PIT", "PHI", "SF", "ARI"), "wc", "no"))) %>% 
+  mutate(playoffs = as.factor(playoffs))
+  
+
+```
+
+### KNN with 3 classes
+
+```{r knn_3_class}
+season23_knnc <- season23c %>% 
+  select(posteam, epa_per_play, sack_per_pass, on_schedule_rate, tfl_rate, no_huddle_rate, first_down_rate, third_down_conversion_rate, def_penalty_rate, playoffs)
+
+season22_knnc <- season22c %>% 
+  select(posteam, epa_per_play, sack_per_pass, on_schedule_rate, tfl_rate, no_huddle_rate, first_down_rate, third_down_conversion_rate, def_penalty_rate, playoffs)
+
+knn22c <- class::knn(train = season22_knnc[,2:9], test = season23_knnc[,2:9], cl = season22_knnc$playoffs, k = 10)
+
+
+table(knn22c, season23_knnc$playoffs)
+#test error
+#9/32 k = 10
+#10/32 k = 5
+#11/32 k = 15
+#11/32 k = 8
+
+#here we are not as accurate in our predictions
+
+```
+
+
+### Bagging Random Forest with 3 classes
+
+```{r bagging_3_class}
+bag_season22c <- randomForest(playoffs~. - posteam,data= season22_knnc, mtry = 3, ntree = 500)
+bag_season22c
+#40.62% training error rate
+
+yhat_bag22c  <- predict(bag_season22c,newdata=season23_knnc, type = "class")
+table(yhat_bag22c,season23_knnc$playoffs)
+#10/32 error rate
+
+#by increasing the amount of classes we are predicting, we doubled our test error from before
+```
+
+## Trying Differential (Offense - Defense)
+
+### Let's Start With Logistic Regression, using the 2022 dataset as training and the 2023 dataset as the validation.
+
+```{r start_with_logistic_stepwise}
+glm_null22d <- glm(playoffs ~ 1, data = season22_diff, 
+                family = binomial)
+
+# MASS::stepAIC(glm_null22d, scope = ~ epa_diff + sack_per_pass_diff + on_schedule_rate_diff + tfl_diff + no_huddle_diff + first_down_diff + third_down_diff, direction = "forward")
+
+glm_aic22d <- glm(formula = playoffs ~ epa_diff + no_huddle_diff + third_down_diff, 
+    family = binomial, data = season22_diff)
+
+summary(glm_aic22d)
+cv.glm(season23_diff, glm_aic22d, K = 5)$delta[1]
+#.341, worse than before
+
+
+```
+
+### Do we get more from adding `season21_diff`?
+
+```{r logistic_stepwise_seasons2122}
+seasons2122d <- rbind(season22_diff, season21_diff)
+
+glm_null2122d <- glm(playoffs ~ 1, data = seasons2122d, 
+                family = binomial)
+
+# MASS::stepAIC(glm_null22d, scope = ~ epa_diff + sack_per_pass_diff + on_schedule_rate_diff + tfl_diff + no_huddle_diff + first_down_diff + third_down_diff, direction = "forward")
+
+glm_aic2122d <- glm(formula = playoffs ~ epa_diff + no_huddle_diff + third_down_diff, 
+    family = binomial, data = season22_diff)
+summary(glm_aic2122d)
+
+cv.glm(season23_diff, glm_aic2122d, K = 5)$delta[1]
+# 0.299
+#Worse again
+
+```
+
+We can run other models if necessary, but for now, let's skip to KNN and bagging random forests.
+
+### KNN using differential:
+
+```{r knn_seasons21and22}
+ 
+knn2122d <- class::knn(train = seasons2122d[,2:8], test = season23_diff[,2:8], cl = seasons2122d$playoffs, k = 16)
+
+table(knn2122d, season23_diff$playoffs)
+#8/32, k = 10
+#10/32, k = 5
+#11/32, k = 1
+#5/32, k = 16
+
+#not as good, but close to random forests
+
+
+```
+
+### Bagging Random Forests Using Differential
+
+```{r bagging_randomforest_diff}
+
+bag_season22d <- randomForest(playoffs~. - posteam,data= season22_diff %>% mutate(playoffs = as.factor(playoffs)), ntree = 1000)
+bag_season22d
+
+# training error 10/32 with 1000 trees, default mtry
+
+
+yhat_bag22d_c  <- predict(bag_season22d,newdata=season23_diff, type = "class")
+
+table(yhat_bag22d_c,season23_diff$playoffs)
+
+
+#test error of 5/32 using just season22, but 2 false positives, not as good, but something to explore in the future
+
+bag_season2122d <- randomForest(playoffs~. - posteam,data= seasons2122d %>% mutate(playoffs = as.factor(playoffs)), ntree = 1000)
+bag_season2122d
+
+
+yhat_bag2122d_c  <- predict(bag_season2122d,newdata=season23_diff, type = "class")
+
+table(yhat_bag2122d_c,season23_diff$playoffs)
+#still 5/32
+
+```
+
+It does not perform as well, but it may be something worth exploring in the future with more variables. I am satisfied with the overall test error of 4/32 given the small sample size and looking forward to bettering this project outside of class.
+
+
