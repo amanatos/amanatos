@@ -1,0 +1,748 @@
+---
+title: "NFL Sack Project"
+format: html
+editor: visual
+---
+
+## When do sacks happen? What do we do with this information?
+
+```{r setup}
+library(car)
+library(corrplot)
+library(dplyr)
+library(tidyverse)
+library(nflreadr)
+library(ggplot2)
+library(plotly)
+library(caret)
+library(MASS)
+library(nflfastR)
+library(boot)
+library(patchwork)
+library(scales)
+```
+
+Ordinal Data
+
+```{r extra}
+
+# offstats22 <- nflreadr::load_player_stats(season = 2022, stat_type = "offense")
+# 
+# 
+# defstats22 <- load_player_stats(seasons = 2022, stat_type = "defense")
+# 
+# 
+# off_sacks_22 <- offstats22 %>% 
+#   group_by(recent_team) %>% 
+#   summarise(sacks = sum(sacks),
+#             sackyards = sum(sack_yards),
+#             yardspersack = sackyards / sacks)
+# 
+# 
+# 
+# def_sacks_22 <- defstats22 %>%  
+#   group_by(team) %>% 
+#   summarise(sacks = sum(sacks),
+#             sackyards = sum(sack_yards),
+#             yardspersack = sackyards / sacks) 
+# 
+# sack_diffs_22 <- left_join(def_sacks_22, off_sacks_22, by = c("team" = "recent_team"))
+# 
+# sd_22 <- sack_diffs_22 %>% 
+#   mutate(sackdiff = sacks.x - sacks.y,
+#          netsackyards = sackyards.x - sackyards.y,) %>% 
+#   select(team, sackdiff, netsackyards)
+# 
+# sack_diffs_22 %>% 
+#   plot_ly(x = ~ -sacks.y, y = ~ sacks.x, text = ~ team) %>% 
+#   add_text()
+#   
+# 
+# ggplot(sd_22) + geom_point(aes(x = sackdiff, y = netsackyards))
+# 
+# sd_22 %>% 
+#   plot_ly(x = ~sackdiff, y = ~ netsackyards, text = ~team) %>% 
+#   add_text()
+```
+
+Categorical / ordinal element: playoffs or not?
+
+Numeric: Win percentage
+
+PLAYBYPLAY: Group into sack, pressure, neither
+
+Sack / non sack
+
+```{r loading_in_data}
+pbp22 <- nflreadr::load_pbp(seasons = 2022)
+
+pbp22_1 <- pbp22 %>%
+  filter(play_type == "pass") %>% 
+  mutate(playresult = ifelse(sack == 1,  "sack", "non-sack")) %>% dplyr::select(sack, yardline_100, quarter_seconds_remaining, half_seconds_remaining, game_seconds_remaining, down, goal_to_go, ydstogo, shotgun, no_huddle, qb_dropback, score_differential)
+
+pbp22_2 <- pbp22 %>% 
+   filter(play_type == "pass") %>% 
+  mutate(playresult = ifelse(sack == 1,  "sack", "non-sack")) %>% 
+  dplyr::select(down, ydstogo, playresult, epa)
+
+# 
+# t.test(epa~playresult, data = pbp22_2)
+# wilcox.test(epa~playresult, data = pbp22_2)
+# 
+# 
+# sackmodel0 <- lm(playresult~epa + down + ydstogo + score_differential + yardline_100 + game_seconds_remaining, data = pbp22_2)
+```
+
+```{r model_separation}
+pbp_22_modeldata <- na.omit(pbp22_1)
+
+# Split the data into training and test set
+set.seed(14)
+pbp_22_training_samples <- pbp22_1$sack %>% 
+  createDataPartition(p = 0.8, list = FALSE)
+
+pbp22_train_data  <- pbp22_1[pbp_22_training_samples, ]
+pbp22_test_data <- pbp22_1[-pbp_22_training_samples, ]
+```
+
+Logistic Regression attempt
+
+```{r model}
+model <- glm(sack ~., data = pbp22_train_data, family = binomial) %>%
+  MASS::stepAIC(trace = FALSE)
+# Summarize the final selected model
+summary(model)
+# Make predictions
+probabilities <- model %>% predict(pbp22_test_data, type = "response")
+predicted.classes <- ifelse(probabilities > 0.5, 1, 0)
+# Model accuracy
+mean(na.omit(predicted.classes) == pbp22_test_data$sack)
+
+car::vif(model)
+
+plot(model)
+```
+
+plots
+
+```{r down_ydstogo}
+down_ydstogo_data <- pbp22 %>% 
+  filter(play_type == "pass") %>% 
+  mutate(playresult = ifelse(sack == 1,  "sack", "non-sack")) %>% 
+  filter(!is.na(down)) %>% 
+  group_by(down, ydstogo) %>% 
+  summarise(sack_count = sum(sack), 
+            play_count = n(),
+            sacks_per_play = sack_count / play_count) %>% 
+  filter(play_count > 10)
+
+down_ydstogo_exploratory_plot <- ggplot(down_ydstogo_data) + geom_col(aes(x = ydstogo, y = sack_count), stat = "identity") + facet_wrap(~down)
+
+
+down_ydstogo_plot <- ggplot(down_ydstogo_data) + geom_bar(aes(x = ydstogo, y = sack_count), stat = "identity", color = "white", fill = "black") +  scale_x_continuous(breaks = c(0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100))  + theme(panel.grid.minor = element_line(linetype = "blank"),
+    panel.background = element_rect(fill = "green4"),
+    plot.background = element_rect(fill = "antiquewhite")) +labs(title = "Sacks Based On Down and Yards to Go",
+    x = "Yards to Go", y = "Sacks") + facet_grid(~down)  
+
+down_ydstogo_plotly <- ggplotly(down_ydstogo_plot)
+
+
+
+yardline_data <- pbp22_1 %>% 
+  mutate(yardline = -(yardline_100 - 100)) %>% 
+  group_by(yardline) %>% 
+  summarise(sack_count = sum(sack), 
+            play_count = n(),
+            sacks_per_play = sack_count / play_count) %>% 
+  filter(play_count > 10)
+
+
+
+ggplot(yardline_data) + geom_col(aes(x = yardline, y = sack_count), stat = "identity")
+
+yardline_plot <- ggplot(yardline_data) + geom_bar(aes(x = yardline, y = sack_count), stat = "identity", color = "white", fill = "black") + scale_x_continuous(breaks = c(0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100))  + theme(panel.grid.minor = element_line(linetype = "blank"),
+    panel.background = element_rect(fill = "green4"),
+    plot.background = element_rect(fill = "antiquewhite")) +labs(title = "Sacks Based On What Yardline A Given Play Starts From",
+    x = "Yardline", y = "Sacks")
+
+yardline_plotly <- ggplotly(yardline_plot)
+# 
+#htmlwidgets::saveWidget(yardline_plotly, "yardline_plotly.html")
+# htmlwidgets::saveWidget(down_ydstogo_plotly, "down_ydstogo_plotly_1.html")
+```
+
+Corrplots
+
+```{r corrplot}
+corrplot(cor(pbp_22_modeldata), method = "number")
+```
+
+Third Down
+
+```{r third_down}
+down3_22 <- pbp22 %>% 
+  filter(down == 3 & !is.na(sack)) %>% 
+  group_by(ydstogo) %>% 
+  summarise(run = sum(play_type == "run"),
+            pass = sum(play_type == "pass"),
+            playcount = n(),
+            runpct = round(run / playcount, 3),
+            passpct = round(pass / playcount, 3),
+            sack_count = sum(sack == 1),
+            sack_per_pass = round(sack_count / pass, 3),
+            sack_per_play = round(sack_count / playcount, 3)) %>% 
+  filter(ydstogo <= 15)
+
+
+down_3_pivot <- pivot_longer(down3_22, cols = c("runpct", "passpct", "sack_per_pass")) %>% 
+  rename("result" = "name")
+
+down_3_pivot_total_plays <- pivot_longer(down3_22, cols = c("run", "pass", "sack_count")) %>% 
+  rename("totals" = "name")
+
+shiny_plot_idea <- ggplot(down_3_pivot) + geom_col(aes(x = ydstogo, y = value, fill = result), position = "dodge", color = "white")  + scale_x_continuous(breaks = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)) + scale_y_continuous(breaks = c(.1, .2, .3, .4, .5, .6, .7, .8, .9, 1))
+
+# down_3_pivot %>% 
+#   plot_ly(x = ~ydstogo, y = ~result, type = "bar")
+ 
+down3_22 %>% 
+  plot_ly(x = ~ydstogo, y = ~sack_per_play, type = "bar") 
+
+
+down3_22_table <- down3_22 %>% 
+  filter(playcount > 5) %>% 
+  DT::datatable(colnames = c("Yards To Go", "Total Run", "Total Pass", "Total Plays", "Run %", "Pass %", "Total Sacks", "Sack % (Per Pass)", "Sack % (Total)"), caption = "Third Down in 2022: Is there An Advantage Knowing if a Team Will Run or Pass?")
+
+
+ggplot(down3_22) + geom_point(aes(x = passpct, y = sack_per_play))
+
+cor(down3_22$passpct, down3_22$sack_per_play)
+
+
+runvspassplot <- pbp22 %>% 
+  filter(down == 3 & (play_type == "run" | play_type == "pass")) %>% 
+  ggplot() + geom_bar(aes(x = ydstogo, y = play_type), position = "dodge") + facet_wrap(~posteam)
+
+
+#group by if they are on their own side of the field or their opponents
+
+down3_which_side_of_field <- pbp22 %>% 
+  filter(down == 3 & !is.na(sack)) %>% 
+  mutate(which_side = ifelse(yardline_100 >= 50, "own", "opp")) %>%  filter(down == 3 & (play_type == "run" | play_type == "pass") & ydstogo <= 15)  
+
+ggplot(down3_which_side_of_field) + geom_bar(aes(x = ydstogo, fill = play_type), position = "dodge") + facet_wrap(~which_side) + theme(axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif"),
+    axis.text.y = element_text(family = "serif"),
+    legend.text = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray100")) +labs(title = "Does the Side of the Field a Team is On Determine if they Run Or Pass on Third Down?",
+    x = "Yards To Go", y = "Count", fill = "Run Or Pass?")
+
+
+
+```
+
+```{r quarter_seconds_remaining}
+
+```
+
+Where do sacks have the biggest impact on EPA?
+
+Exploring Yardline
+
+```{r epa_impact_on_sacks}
+sack_epa_impact <- pbp22 %>% 
+  filter(!is.na(sack), !is.na(yardline_100)) %>% 
+  mutate(yardline_ranges = case_when(yardline_100 %in% 90:100 ~ "Own Goal Line to 10", 
+                                     yardline_100 %in% 89:80 ~ "Own 11 to 20",
+                                     yardline_100 %in% 79:70 ~ "Own 21 to 30",
+                                     yardline_100 %in% 69:60 ~ "Own 31 to 40",
+                                     yardline_100 %in% 59:50 ~ "Own 41 to 50",
+                                     yardline_100 %in% 49:40 ~ "Opposing 49 to 40",
+                                     yardline_100 %in% 39:30 ~ "Opposing 39 to 30",
+                                     yardline_100 %in% 29:20 ~ "Opposing 29 to 20",
+                                     yardline_100 %in% 19:10 ~ "Opposing 19 to 10",
+                                     yardline_100 %in% 9:0 ~ "Opposing 9 to Goal Line"))
+
+
+epa_per_play_yard_ranges <- sack_epa_impact %>% 
+  filter(sack == 1) %>% 
+  group_by(down, yardline_ranges) %>% 
+  summarise(epa_per_play = mean(epa), 
+            play_count = n()) 
+
+epa_per_play_on_third_down <- sack_epa_impact %>% 
+  filter(sack == 1, down == 3) %>% 
+  group_by(yardline_ranges) %>% 
+  summarise(epa_per_play = mean(epa), 
+          play_count = n())
+
+
+# ggplot(epa_per_play_on_third_down) + geom_bar(aes(x = yardline_ranges, fill = epa_per_play))
+
+third_down_epa_plot <- ggplot(epa_per_play_on_third_down) + geom_col(aes(x = fct_relevel(yardline_ranges, "Own Goal Line to 10", "Own 11 to 20", "Own 21 to 30", "Own 31 to 40", "Own 41 to 50", "Opposing 49 to 40", "Opposing 39 to 30",  "Opposing 29 to 20", "Opposing 19 to 10", "Opposing 9 to Goal Line"), y = -epa_per_play), color = "white", fill = "black") + theme(axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif",
+        vjust = 0.6, angle = 20), axis.text.y = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "green4")) +labs(title = "How Impactful is a Third Down Sack Based on Where You Are on the Field?",
+    x = "Yardlines", y = "Epa Per Play (-)")
+
+
+
+
+ggplot(epa_per_play_yard_ranges) + geom_col(aes(x = fct_relevel(yardline_ranges, "Own Goal Line to 10", "Own 11 to 20", "Own 21 to 30", "Own 31 to 40", "Own 41 to 50", "Opposing 49 to 40", "Opposing 39 to 30",  "Opposing 29 to 20", "Opposing 19 to 10", "Opposing 9 to Goal Line"), y = -epa_per_play)) + theme(axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif",
+        vjust = 0.6, angle = 20), axis.text.y = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "green4")) +labs(title = "How Impactful is a Third Down Sack Based on Where You Are on the Field?",
+    x = "Yardlines", y = "Epa Per Play (-)") + facet_wrap(~down)
+```
+
+Looking at Overall EPA Impacts
+
+```{r epa_impacts}
+epa_table <- pbp22 %>% 
+  filter(!is.na(sack), !is.na(interception), !is.na(fumble_lost), play_type %in% c("run", "pass")) %>% 
+  mutate(play_result = case_when(play_type == "pass" & sack == 0 & interception == 0 & fumble_lost == 0  ~ "pass",
+                                 play_type == "run" & fumble_lost == 0 & tackled_for_loss == 0 ~ "run",
+                                 interception == 1 ~ "int",
+                                 fumble_lost == 1 ~ "fum",
+                                 sack == 1 ~ "sack",
+                                 play_type == "run" & tackled_for_loss == 1 & fumble_lost == 0 ~ "tfl")) %>% 
+  group_by(play_result) %>% 
+  summarise(epa_per_play = round(mean(epa), 3),
+            plays = n())
+
+
+epa_per_play_plot <- epa_table %>% 
+  plot_ly(x = ~ play_result, y = ~ - epa_per_play) %>% 
+  add_bars() %>% 
+  add_text(text = ~epa_per_play, textposition = "top middle") %>% 
+  layout(title = "EPA Per Play Based on Play Result", xaxis = list(title = "test x"))
+
+ggplot(epa_table) + geom_col(aes(x = epa_per_play, y = play_result), color = "white", fill = "black") + geom_vline(xintercept = 0, color = "white", lty = 1, size = 2) + theme(axis.line = element_line(colour = "white",
+    linetype = "solid"), panel.grid.major = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif"),
+    axis.text.y = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "green4"),
+    plot.background = element_rect(fill = "antiquewhite1")) +labs(title = "EPA Per Play Based On Play Result",
+    x = "EPA Per Play", y = "Play Result") 
+
+```
+
+Exploring Shotgun
+
+```{r shotgun}
+shotgun_data <- pbp22 %>% 
+  filter(!is.na(sack), !is.na(shotgun), play_type %in% c("run", "pass")) %>% 
+  group_by(shotgun, play_type) %>% 
+  summarise(playcount = n(),
+            sacks = sum(sack == 1),
+            sacks_per_play = sacks / playcount)
+
+play_type_cols <- c("run" = "blue", "pass" = "red")
+
+exploring_third_down <- pbp22 %>% 
+  filter(!is.na(sack), !is.na(shotgun), play_type %in% c("run", "pass"), down == 3, ydstogo <= 20) %>% 
+  mutate(shotgun_plot = ifelse(shotgun == 1, "Shotgun", "Under Center"))
+
+exploring_third_down_plot <-  ggplot(exploring_third_down) + geom_bar(aes(x = ydstogo, fill = play_type), position = "dodge", color = "white") + facet_wrap(~shotgun_plot) + scale_color_manual(values = play_type_cols, aesthetics = "fill") + theme(panel.grid.major = element_line(linetype = "blank"),
+    panel.background = element_rect(fill = "green4"),
+    plot.background = element_rect(fill = "antiquewhite"),
+    legend.background = element_rect(fill = "antiquewhite")) +labs(title = "Third Down: Do Teams Run or Pass More if They are in Shotgun?",
+    x = "Yards To Go", y = "Plays", fill = "Play Type")
+
+exploring_third_down_plotly <- ggplotly(exploring_third_down_plot)
+
+# htmlwidgets::saveWidget(exploring_third_down_plotly, 
+#                     "exploring_third_down_plotly.html")
+
+# pbp22 %>% 
+#   filter(!is.na(sack), !is.na(shotgun), play_type %in% c("run", "pass"), down == 3) %>% 
+#  ggplot(aes(x = factor(ydstogo))) +  
+#         geom_bar(aes(y = play_type))
+
+
+third_down_exploration <- pbp22 %>% 
+  filter(!is.na(sack), !is.na(shotgun), play_type %in% c("run", "pass"), down == 3) %>% 
+  mutate(shotgun = as.factor(shotgun)) %>% 
+  group_by(ydstogo, shotgun) %>% 
+  summarise(sacks = sum(sack == 1),
+            playcount = n(),
+            pct_run = sum(play_type == "run") / playcount, 
+            pct_pass = sum(play_type == "pass") / playcount,
+            sacks_per_play = sacks / playcount, 
+            .groups = "drop") 
+
+third_down_explore_plot <- ggplot(third_down_exploration) + geom_col(aes(x = ydstogo, y = sacks_per_play, fill = shotgun), position = "dodge") 
+
+
+#shotgun / play type
+
+all_down_shotgun_exploration <-  pbp22 %>% 
+  filter(!is.na(sack), !is.na(shotgun), play_type %in% c("run", "pass"), !is.na(down)) %>%  
+  group_by(down) %>% 
+  summarise(playcount = n(),
+    pct_in_shotgun = sum(shotgun == 1) / playcount)
+
+#Interestingly, teams line up in shotgun mostly on third down.
+ 
+```
+
+Down Exploration
+
+```{r down_exploration}
+sacks_by_down <- pbp22 %>% 
+  filter(!is.na(sack), play_type %in% c("run", "pass"), !is.na(down)) %>% 
+  group_by(down) %>% 
+  summarise(playcount = n(),
+    pct_in_shotgun = sum(shotgun == 1) / playcount, 
+    pct_run = sum(play_type == "run") / playcount,
+    pct_pass = sum(play_type == "pass") / playcount,
+    pct_sack = sum(sack == 1) / playcount)
+
+
+down_3_compared_to_other_downs <- pbp22 %>% 
+  filter(!is.na(sack), play_type %in% c("run", "pass"), !is.na(down)) %>% 
+  mutate(down_new = ifelse(down == 3, "3", "Other")) %>% 
+  group_by(down_new) %>% 
+  summarise(playcount = n(),
+    pct_in_shotgun = sum(shotgun == 1) / playcount, 
+    pct_run = sum(play_type == "run") / playcount,
+    pct_pass = sum(play_type == "pass") / playcount,
+    pct_sack = sum(sack == 1) / playcount,
+    epa_per_play = mean(epa))
+    # epa_per_play_on_sacks = ifelse(sack == 1, sum(sack), 0))
+
+
+ggplot(sacks_by_down) + geom_bar(aes(x = down, fill = pct_sack))
+
+##sacks are more likely to occur on 3rd down
+```
+
+Exploring "Pressure" through QB Hits
+
+```{r looking_at_pressure}
+# qb_hit_as_pressure <- pbp22 %>% 
+#   filter(!is.na(sack), !is.na(qb_hit), play_type %in% c("pass", "run") %>% 
+#   mutate(result = case_when(play_type == "run" ~ "run",
+#                             sack == 1 ~ "sack",
+#                             sack == 0 & qb_hit == 1 ~ "pressure",
+#                             sack == 0 & qb_hit == 0 ~ "none")) 
+# 
+# qb_pressure_epa <- qb_hit_as_pressure %>%
+#   filter(down == 3) %>% 
+#   group_by(ydstogo, result) %>% 
+#   summarise(epa_per_play = mean(epa), 
+#             plays = n(), 
+#             sackpct = sum(sack == 1) / plays,
+#             .groups = "drop")
+# 
+# 
+# playresult_plot <- ggplot(qb_pressure_epa) + geom_col(aes(x = ydstogo, y = epa_per_play, fill = result), position = "dodge")
+# 
+# 
+# play_counts <- qb_hit_as_pressure %>% 
+#   group_by(result) %>% 
+#   summarise(playcount = n(),
+#             epa_per_play = mean(epa))
+# 
+# epa_with_pressure <- qb_hit_as_pressure %>% 
+#   group_by(result) %>% 
+#   summarise(epa_per_play = mean(epa))
+# 
+# 
+# anova_of_epa <-aov(epa~result, data = qb_hit_as_pressure)
+# summary(anova_of_epa)
+# 
+# pairwise.t.test(qb_hit_as_pressure$epa, qb_hit_as_pressure$result, p.adjust.method = "bonferroni")
+# 
+# TukeyHSD(anova_of_epa)
+
+#Lets do multiple comparisons here
+
+
+
+# anova_of_epa <- aov(epa_per_play~result, data = epa_with_pressure)
+# summary(anova_of_epa)
+```
+
+Football Field Plot
+
+```{r ggfootball_function}
+# ggfootball <- function(left_endzone_color = "gray90",
+#                        right_endzone_color = "gray90",
+#                        field_color = "green4",
+#                        field_alpha = 0.85,
+#                        top_buffer = 1,
+#                        bottom_buffer = 1,
+#                        left_buffer = 1,
+#                        right_buffer = 1,
+#                        five_yd_lines = TRUE,
+#                        ydline_labels = TRUE,
+#                        ydline_label_size = 4,
+#                        outer_hash = TRUE,
+#                        inner_hash = FALSE)
+```
+
+```{r football_plot}
+# ggfootball()
+# ggfootball(left_endzone = "red", right_endzone = "blue",
+#     field_alpha = 0.7)
+# ggfootball() + geom_point(data =
+#     data.frame(x = c(10, 20), y = c(20, 30)),
+#     aes(x = x, y = y))
+```
+
+Shiny App Data
+
+```{r shiny_idea}
+pbp22_shiny <-pbp22 %>% 
+  filter(down == 3 & !is.na(sack)) %>%
+  group_by(posteam, ydstogo) %>% 
+  summarise(run = sum(play_type == "run"),
+            pass = sum(play_type == "pass"),
+            playcount = n(),
+            runpct = round(run / playcount, 3),
+            passpct = round(pass / playcount, 3),
+            sack_count = sum(sack == 1),
+            sack_per_pass = round(sack_count / pass, 3),
+            sack_per_play = round(sack_count / playcount, 3))
+
+pbp22_shiny %>% 
+  plot_ly(x = ~ydstogo, y = ~sack_per_play, type = "bar") 
+```
+
+Exploring By Team, Pivoting Longer
+
+```{r third_down_sack_team_shiny_ideas}
+# pbp_shiny <- nflreadr::load_pbp(seasons = 2002:2023)
+
+# pbp_shiny %>% 
+#   str_detect(game_id, selected_year)
+
+
+third_down_offense <- pbp22 %>% 
+  filter(!is.na(sack), play_type %in% c("run", "pass"), down == 3)
+
+third_down_defense<- pbp22 %>% 
+  filter(!is.na(sack), play_type %in% c("run", "pass"), down == 3)
+
+offense_table <- third_down_offense %>%  mutate(yds_to_go_groups = case_when( ydstogo <= 4 ~ "short",
+                                       ydstogo %in% (4:8) ~ "medium",
+                                       ydstogo %in% (9:12) ~ "long",
+                                       ydstogo %in% (13:16) ~ "super long",
+                                       ydstogo > 16 ~ "good luck" )) %>%
+  group_by(yds_to_go_groups) %>% 
+  summarise(plays =  n(),
+            passes = sum(play_type == "pass"),
+            run = sum(play_type == "run") / plays,
+            pass = sum(play_type == "pass") / plays,
+            sacks = sum(sack == 1),
+            sack = sum(sack == 1) / plays,
+            sackPerPass = sacks / passes,
+            epa_per_play = mean(epa), 
+            epa_when_sacked = mean(ifelse(sack == 1, epa, 0)), 
+            success = sum(third_down_converted == 1) / plays) %>% 
+  filter(plays >= 3)
+
+
+offense_pivot <- offense_table %>% 
+  pivot_longer(cols = c("run", "pass", "sackPerPass", "success")) %>% 
+  rename("yvar" = "name")
+
+defense_table <- third_down_defense %>% 
+  mutate(yds_to_go_groups = case_when( ydstogo <= 4 ~ "short",
+                                       ydstogo %in% (4:8) ~ "medium",
+                                       ydstogo %in% (9:12) ~ "long",
+                                       ydstogo %in% (13:16) ~ "super long",
+                                       ydstogo > 16 ~ "good luck" )) %>%
+  group_by(yds_to_go_groups) %>% 
+  summarise(plays =  n(),
+            passes = sum(play_type == "pass"),
+            run = sum(play_type == "run") / plays,
+            pass = sum(play_type == "pass") / plays,
+            sacks = sum(sack == 1),
+            sack = sum(sack == 1) / plays,
+            sackPerPass = sacks / passes,
+            epa_per_play = mean(epa), 
+            epa_when_sacked = mean(ifelse(sack == 1, epa, 0)),
+            stop = 1 - sum(third_down_converted == 1)/plays) %>% 
+  filter(plays >= 3) 
+
+defense_pivot <- defense_table %>% 
+  pivot_longer(cols = c("run", "pass", "sackPerPass", "stop")) %>% 
+  rename("yvar" = "name") 
+
+#tried size = plays, did not like resulting plot
+
+p_off <- ggplot(offense_pivot) + geom_col(aes(x = fct_relevel(yds_to_go_groups, "short", "medium", "long", "super long", "good luck"), y = value, fill = yvar), color = "white", position = "dodge") + theme(axis.ticks = element_line(linetype = "blank"),
+    panel.grid.major = element_line(linetype = "blank"),
+    axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif"),
+    axis.text.y = element_text(family = "serif"),
+    legend.text = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "green4"),
+    plot.background = element_rect(fill = "antiquewhite"),
+    legend.key = element_rect(fill = "antiquewhite"),
+    legend.background = element_rect(fill = "antiquewhite"),
+    legend.position = "bottom", legend.direction = "horizontal") +labs(title = "NFL 2022 Third Down Offense", x = "Third and ____?", y = "Percentage", fill = "Play or Result:") +
+        scale_y_continuous(breaks = c(0, .1, .2, .3, .4, .5, .6, .7, .8, .9, 1), labels = scales::percent_format(accuracy = 1)) 
+    
+
+p_def <- ggplot(defense_pivot) + geom_col(aes(x = fct_relevel(yds_to_go_groups, "short", "medium", "long", "super long", "good luck"), y = value, fill = yvar), color = "white", position = "dodge") + theme(axis.ticks = element_line(linetype = "blank"),
+    panel.grid.major = element_line(linetype = "blank"),
+    axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif"),
+    axis.text.y = element_text(family = "serif"),
+    legend.text = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "green4"),
+    plot.background = element_rect(fill = "antiquewhite"),
+    legend.key = element_rect(fill = "antiquewhite"),
+    legend.background = element_rect(fill = "antiquewhite"),
+    legend.position = "bottom", legend.direction = "horizontal") + labs(title = "NFL 2022 Third Down Defense", x = "Third and ____?", y = "Percentage", fill = "Play or Result:") +
+        scale_y_continuous(breaks = c(0, .1, .2, .3, .4, .5, .6, .7, .8, .9, 1), labels = scales::percent_format(accuracy = 1))  
+
+third_down_2022 <- p_off + p_def
+# ggplotly(p_off + p_def) 
+#didn't work from patchwork :(
+```
+
+Entire Teams' Third Down
+
+```{r third_down_dt_attempt}
+
+nfl_third_down_offense <- pbp22 %>% 
+  filter(!is.na(sack), play_type %in% c("run", "pass"), down == 3) %>%  mutate(yds_to_go_groups = case_when( ydstogo <= 4 ~ "short",
+                                       ydstogo %in% (4:8) ~ "medium",
+                                       ydstogo %in% (9:12) ~ "long",
+                                       ydstogo %in% (13:16) ~ "super long",
+                                       ydstogo > 16 ~ "good luck" )) %>% 
+  group_by(yds_to_go_groups, posteam) %>% 
+  summarise(plays =  n(),
+            run_pct_off = sum(play_type == "run") / plays,
+            rank_run = rank(-run_pct_off),
+            pass_pct_off = sum(play_type == "pass") / plays,
+            rank_pass = rank(-pass_pct_off),
+            sackperpass_off = sum(sack == 1) / pass,
+            epa_per_play_off = mean(epa), 
+            rank_epa = rank(-epa_per_play_off),
+            success = sum(third_down_converted == 1) / plays,
+            rank_success = rank(-success),
+            .groups = "drop") %>% 
+  filter(plays >= 3)
+
+nfl_third_down_defense <- pbp22 %>% 
+  filter(!is.na(sack), play_type %in% c("run", "pass"), down == 3) %>%  mutate(yds_to_go_groups = case_when( ydstogo <= 4 ~ "short",
+                                       ydstogo %in% (4:8) ~ "medium",
+                                       ydstogo %in% (9:12) ~ "long",
+                                       ydstogo %in% (13:16) ~ "super long",
+                                       ydstogo > 16 ~ "good luck" )) %>%
+  group_by(defteam, yds_to_go_groups) %>% 
+  summarise(plays =  n(),
+            run_pct_def = sum(play_type == "run") / plays,
+            pass_pct_def = sum(play_type == "pass") / plays,
+            sackperpass_def = sum(sack == 1) / pass,
+            epa_per_play_def = mean(epa), 
+            stop = 1 -sum(third_down_converted == 1) / plays, .groups = "drop") %>% 
+  filter(plays >= 3)
+
+```
+
+Travis Kelce / Taylor Swift Attendance (NONPARAMETRICS)
+
+```{r kelce_23}
+kelce_counting_stats_23 <- nflreadr::load_player_stats(seasons = 2023) 
+
+just_kelce <- kelce_counting_stats_23 %>% 
+  filter(player_name == "T.Kelce")
+
+taylor_attendance <- data.frame(week = c(2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14),
+                                attendance = c("no", "yes", "yes", "no", "yes", "yes", "no", "no", "no", "no", "yes", "yes"))
+
+kelce_swift <- left_join(just_kelce, taylor_attendance, by = "week")
+
+counting_stats_swift_att <- kelce_swift %>% 
+  group_by(attendance) %>% 
+  summarise(yards_per_game = mean(receiving_yards),
+            tds_per_game = mean(receiving_tds),
+            yac_per_game = mean(receiving_yards_after_catch),
+            rec_per_game = mean(receptions), 
+            targets_per_game = mean(targets))
+
+hist(kelce_swift$receiving_yards)
+# hist(kelce_swift$receiving_yards_after_catch)
+
+#Not normally distributed data. Sample size too low obviously
+
+t.test(receiving_yards~attendance, data = kelce_swift, alternative = "less")
+#p = 0.0389
+
+  ggplot(kelce_swift) + geom_histogram(aes(x = receiving_yards), binwidth = 20) + facet_wrap(~attendance)
+
+wilcox.test(receiving_yards~attendance, data = kelce_swift, alternative = "less")
+#p = 0.0260
+
+#all these values after week 13
+
+#after week 14
+
+
+t.test(receiving_yards~attendance, data = kelce_swift, alternative = "less")
+#p = 0.0389
+#after week 14: p = 0.025
+
+  ggplot(kelce_swift) + geom_histogram(aes(x = receiving_yards), binwidth = 20) + facet_wrap(~attendance)
+
+wilcox.test(receiving_yards~attendance, data = kelce_swift, alternative = "less")
+#After Week 14: p = 0.021
+
+#control to see if teams were similarly rated
+
+
+#subtract medians to center at 0
+
+# 
+# wilcox.test(receiving_yards_after_catch~attendance, data = kelce_swift)
+# #p = 0.1775
+# 
+# wilcox.test(receiving_tds~attendance, data = kelce_swift)
+
+
+#She did attend week 13
+```
+
+```{r kelce_yards_boot_ci}
+
+kelce_swift_yards <-  kelce_swift %>% 
+  dplyr::select(receiving_yards, attendance)
+
+# meanDiff = function(dataFrame, indexVector) {
+# m1 = mean(subset(dataFrame[indexVector, 1], dataFrame[indexVector, 2] == "yes"))
+# m2 = mean(subset(dataFrame[indexVector, 1], dataFrame[indexVector, 2] == "no"))
+# md = m1 - m2
+# return(md)}
+# 
+# boot(data = kelce_swift_yards,
+# statistic = meanDiff,
+# R = 10000,
+# strata = factor(kelce_swift_yards$attendance)) %>% 
+# boot.ci()
+
+# 
+# set.seed(20231210)
+# meanDiff <- function(x, w){
+#     y <- tapply(x[w,1], x[w,2], mean)
+#     y[1]-y[2]}
+# both_boot <- boot(kelce_swift_yards, statistic = meanDiff, R = 10000)
+# boot.ci(both_boot, conf = .95)
+
+
+```
