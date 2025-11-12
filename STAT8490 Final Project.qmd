@@ -11,22 +11,40 @@ editor: visual
 library(tidyverse)
 library(ggplot2)
 library(nflreadr)
+library(glmnet)
+library(e1071)
+library(boot)
+library(tree)
+library(randomForest)
+set.seed(1234)
 ```
-
-
 
 ## Data cleaning
 
 ```{r data}
 s24 <- nflreadr::load_pbp(seasons = 2024)
 
+
 s24rp <- s24 %>% 
   filter(play_type %in% c("run", "pass"),
          two_point_attempt == 0) %>% 
-  select(play_id, down, ydstogo, posteam, yardline_100, half_seconds_remaining, game_seconds_remaining, shotgun, no_huddle, goal_to_go, posteam_timeouts_remaining, score_differential, play_type)
+  select(play_id, down, ydstogo, posteam, yardline_100, half_seconds_remaining, game_seconds_remaining, shotgun, no_huddle, goal_to_go, posteam_timeouts_remaining, score_differential, play_type) %>% 
+  mutate(play_type = ifelse(play_type == "run", 1, 0))
 
-write.csv(s24rp, "s24rp.csv")
+# s00 <- nflreadr::load_pbp(seasons = 2000)
+# 
+#  s00rp <- s00 %>% 
+#   filter(play_type %in% c("run", "pass"),
+#          two_point_attempt == 0) %>%
+#   select(play_id, down, ydstogo, posteam, yardline_100, half_seconds_remaining, game_seconds_remaining, shotgun, no_huddle, goal_to_go, posteam_timeouts_remaining, score_differential, play_type) %>%
+#   mutate(play_type = ifelse(play_type == "run", 1, 0))
+ 
+ 
 
+
+# 
+# write.csv(s00rp, "s00rp.csv")
+# 
 
 
 s24pfg <- s24 %>% 
@@ -38,10 +56,12 @@ s24pfg <- s24 %>%
 #added goal_to_go, posteam_timeouts_remaining
 #got rid of two point conversion attempts, missing values for down
 
-write.csv(s24pfg, "s24pfg.csv")
+# write.csv(s24pfg, "s24pfg.csv")
+
+
+
 
 ```
-
 
 Classes of full dataset
 
@@ -81,13 +101,104 @@ ggplot(s24na) + geom_histogram(aes(x = yardline_100))
 #some from the 7 (makes sense - 5 yard penalty)
 
 
-s24 %>% 
-  filter(play_type %in% c("run", "pass")) %>% 
-  mutate(down_na = ifelse(is.na(down), 1, 0)) %>% 
-  group_by(down_na) %>% 
-  summarise(twopa = mean(two_point_attempt))
-
 #all occurences when down is NA occur on 2 point conversion attempts
 
 ```
 
+# Machine Learning
+
+Run and Pass:
+
+```{r data_split}
+sample <- sample(c(TRUE, FALSE), nrow(s24rp), replace=TRUE, prob=c(0.8,0.2))
+train  <- subset(s24rp, sample == TRUE)
+test   <- subset(s24rp, sample == FALSE)
+
+str(s24rp)
+
+
+```
+
+LDA
+
+```{r lda}
+lda <- MASS::lda(play_type ~ . - play_id, 
+                 data = train) 
+
+mypredlda <- predict(lda, test)
+
+table(mypredlda$class, test$play_type)
+
+(3363 + 1526)/(1508+677+1542+3286)
+
+#LDA: 69.7% accuracy
+
+(3283+1680)/(1508+677+1542+3286)
+
+```
+
+QDA
+
+```{r qda}
+qda <- MASS::qda(play_type ~ . - play_id, 
+                 data = train) 
+
+mypredqda <- predict(qda, test)
+
+table(mypredqda$class, test$play_type)
+
+(2948+1857)/(2948+1857+1193+1015)
+#68.5% accuracy QDA
+
+(2578+1907)/(2948+1857+1193+1015)
+```
+
+KNN
+
+```{r knn}
+train1 <- train %>%  select(-posteam)
+test1 <- test %>% select(-posteam)
+
+
+knn <- class::knn(train = train1[,2:11], test = test1[,2:11], cl = train1$play_type, k = 26)
+
+
+cm_knn <- table(knn, test1$play_type)
+
+test_acc_knn <- (cm_knn[1,1]+cm_knn[2,2])/(cm_knn[1,1]+cm_knn[2,2]+cm_knn[1,2]+cm_knn[2,1])
+test_acc_knn
+
+#k = 5, 57.99%
+#k = 10, 58.33%
+#k = 15, 58.48%
+#k = 50, 59.00%
+#k = 100, 58.92%
+#k = 25, 59.27%
+# k = 26, 59.7%
+
+
+
+```
+
+Random Forests
+
+```{r random_forest}
+train2 <- train %>% 
+  mutate(play_type = factor(ifelse(play_type == 1, "run", "pass")))
+test2 <- test %>% 
+  mutate(play_type = factor(ifelse(play_type == 1, "run", "pass")))
+
+rf <- randomForest(play_type~. - play_id,data= train2, mtry = 3, ntree = 1000, importance = T)
+
+yhat_rf  <- predict(rf,newdata=test2, type = "class")
+cm_rf <- table(yhat_rf,test2$play_type)
+test_acc_rf <- (cm_rf[1,1]+cm_rf[2,2])/(cm_rf[1,1]+cm_rf[2,2]+cm_rf[1,2]+cm_rf[2,1])
+test_acc_rf
+#71.4% accuracy, 500 trees
+#71.69%, 1000 trees
+#72.3% with teams
+
+varImpPlot(rf)
+#shotgun, down, ydstogo top 3 variables
+
+```
