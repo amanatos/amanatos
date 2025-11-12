@@ -1,0 +1,707 @@
+---
+title: "STAT 8444 Final Project"
+author: "Andy Manatos"
+format: html
+editor: visual
+---
+
+## Data - hoopR
+
+To run any kind of regression models, we need to assume independence. In sports, this becomes a problem for many reasons. For the sake of this class, I want to look at the aspect of how time affects player performance. Because athletes are human beings with memory of how we performed in a previous game, will that affect how they perform in the next? For this specific project, I will initially explore an NBA player's counting stats (points, rebounds, assists, etc.) over a season and over their career to see if we can get an idea of forecasting a player's performance in the near future (3-5 games). Every player is different, thus we can spend time making a model for every single one. For the sake of data cleanliness, the main player I will choose to analyze is New York Knicks forward Mikal Bridges (not because he went to Villanova, but he hasn't missed a game in his entire career). The data is from hoopR, a free-to-download package from a github repository.
+
+```{r setup}
+library(hoopR)
+library(tidyverse)
+library(dplyr)
+library(astsa)
+library(forecast)
+library(fGarch)
+Sys.setenv(VROOM_CONNECTION_SIZE = 500072)
+
+
+bridges3 <- hoopR::load_nba_player_box(seasons = 2019:most_recent_nba_season()) 
+
+sum(bridges3$athlete_display_name == "Mikal Bridges") 
+  
+#data not working, there should be 577 entries
+
+bridges4 <- bridges3  %>% 
+  filter(athlete_display_name == "Mikal Bridges", season_type == 2) %>% 
+  arrange(game_date) %>% 
+  mutate(id = c(1:556))
+
+
+bridges6 <- bridges4 %>% 
+  filter(!row_number() %in% c(551:556))
+
+# bridges_ts6 <-  ts(bridges6$points)
+
+bridges_ts <- ts(bridges4$points, frequency = 82)
+#556 observations
+
+bridges_ts_train <- ts(bridges_ts[1:550])
+
+bridges_ts_test <- bridges_ts[551:556]
+
+```
+
+Below is the plot of data (regular season only).
+
+```{r bridges_plot}
+plot(bridges_ts_train)
+acf2(bridges_ts_train)
+#slight linear trend, maybe sin/cos behavior?
+```
+
+There is a slightly linear trend so differencing could be an option, but it does not seem to have a clear seasonal component, although I will explore this deeper (lag 82). Other things to consider are isolating other factors such as matchup and days rest, which could effect performance. I can do this by creating an adjusted value. Lastly, we are learning RNNs in Deep Learning and I think it would be interesting to compare a time series model to an RNN model using the same data to see how both perform.
+
+
+## CleaningTheGlass Data
+
+```{r ctg}
+bridges25 <- read_csv("bridges25.csv") %>% 
+ filter(!row_number() %in% c(1:4))
+bridges24 <- read_csv("bridges24.csv")
+bridges23 <- read_csv("bridges23.csv") %>% 
+   filter(!row_number() %in% c(1:4))
+bridges22 <- read_csv("bridges22.csv") %>% 
+  filter(!row_number() %in% c(1:13))
+bridges21 <- read_csv("bridges21.csv") %>% 
+  filter(!row_number() %in% c(1:22))
+bridges20 <- read_csv("bridges20.csv")
+bridges19 <- read_csv("bridges19.csv")
+
+bridges_ctg <- bind_rows(bridges19, bridges20, bridges21, bridges22, bridges23, bridges24, bridges25) %>% mutate(stl = as.numeric(sub("%", "", `STL%`)),
+           or = as.numeric(sub("%", "", `fgOR%`)),                 usg = as.numeric(sub("%", "", `Usage`)),
+           ast = as.numeric(sub("%", "", `AST%`)),
+           blk = as.numeric(sub("%", "", `BLK%`)),
+           astd = as.numeric(sub("%", "", `ASTD%`)), 
+           date = as.Date(Date, format = "%m/%d/%Y")) %>% 
+  arrange(date) %>% 
+  select(date, stl, or, usg, ast, blk, astd) %>% 
+  mutate(stl = ifelse(is.na(stl), 0, stl),
+         or = ifelse(is.na(or), 0, or),
+         usg =  ifelse(is.na(usg), 0, usg),
+         ast = ifelse(is.na(ast), 0, ast),
+         blk = ifelse(is.na(blk), 0, blk),
+         astd = ifelse(is.na(astd), 0, astd)) %>% 
+  mutate(id = c(1:556))
+
+
+
+
+bridges_fullt <- left_join(bridges7, bridges_ctg, by = "id") %>%
+  select(-date) %>% 
+  filter(!row_number() %in% c(551:556))
+
+bridges_fullte <- full_join(bridges7, bridges_ctg, by = "id") %>% 
+  select(-date) %>% 
+  filter(row_number() %in% c(551:556))
+
+```
+
+
+## PROGRESS SINCE PROPOSAL
+
+Fitting a ARMA model on entire dataset:
+
+```{r bridges_sarima}
+
+#definitely not stationary
+#interesting lags:17, 22, 23are intersting
+
+sarima(bridges_ts_train, 1, 0, 1)
+
+#1, 0, 1 looks good
+
+#lag 23 or lag 82
+
+#mostly consistent with white noise, 
+
+#seasonal AR term significant at lag 23
+
+#ar10: 10th AR term significant, looks consistent with white noise, ljung box borderline
+#aic = 
+
+
+sarima(bridges_ts_train, 9, 1, 0)
+
+```
+
+Other coefficients that were added were not significant. While I would not use this as a final model, the MA(1) model with one round of differencing and a seasonal component of 82 looks consistent with white noise with just one lag (23) above the blue line.
+
+Let's predict Bridges' next 5 games:
+
+```{r prediciton_seasonal_arma}
+sarima.for(bridges_ts_train, 6, 1, 0, 1)
+#very wide intervals, right around the average of 18-19 points
+
+pred0 <- c(18.11639, 18.08527, 18.05440, 18.02378, 17.99341, 17.96330)
+
+sum((pred0 - bridges_ts_test)^2)/6
+#60.0044
+
+sum((pred0[1:5] - bridges_ts_test[1:5])^2)/5
+#7.47
+
+
+#trying ARIMA(5,1,5)
+sarima.for(bridges_ts_train, 6, 9, 1, 0)
+
+
+pred00 <- c(16.60600, 17.26311, 19.09432, 20.44494, 20.04569, 19.04629)
+
+sum((pred00[1:5] - bridges_ts_test[1:5])^2)/5
+#16.21066
+
+#trying AR(9,1,0)
+
+pred000 <- c(19.96757, 18.38139, 18.83909, 20.06331, 19.76722, 19.22262)
+sum((pred000[1:5] - bridges_ts_test[1:5])^2)/5
+#10.71
+
+```
+
+Let's add Regression
+
+```{r data_cleaning_and_model}
+#two games where bridges logs 0 minutes, leading to NA calculations in the data, we need to figure this out
+#for now, treat them as 0
+
+#length(bridges4)
+
+bridges5 <- bridges6 %>% 
+  mutate(fg_pct = field_goals_made / field_goals_attempted,
+         fgmade_2pt = field_goals_made - three_point_field_goals_made,
+         efg_pct = ifelse(minutes != 0, (fgmade_2pt + 0.5*three_point_field_goals_made)/field_goals_attempted, 0),
+         tov_rate = ifelse(minutes != 0, (turnovers)/(field_goals_attempted + .44*free_throws_attempted + turnovers), 0),
+         free_throw_rate = ifelse(minutes != 0, free_throws_made / field_goals_attempted, 0),
+         season = as.factor(season), 
+         time = c(1:length(bridges_ts_train)),
+         reb_ratio = offensive_rebounds/defensive_rebounds,
+         team = factor(team_name), 
+         oppteam = factor(opponent_team_name),
+         starter = factor(ifelse(starter == T, 1, 0))) %>% 
+  select(points, minutes, efg_pct, tov_rate, free_throw_rate, season, time, oppteam, starter) %>% 
+  mutate(tc = time-mean(time))
+
+bridges7 <- bridges4 %>% 
+  mutate(fg_pct = field_goals_made / field_goals_attempted,
+         fgmade_2pt = field_goals_made - three_point_field_goals_made,
+         efg_pct = ifelse(minutes != 0, (fgmade_2pt + 0.5*three_point_field_goals_made)/field_goals_attempted, 0),
+         tov_rate = ifelse(minutes != 0, (turnovers)/(field_goals_attempted + .44*free_throws_attempted + turnovers), 0),
+         free_throw_rate = ifelse(minutes != 0, free_throws_made / field_goals_attempted, 0),
+         season = as.factor(season), 
+         time = c(1:length(bridges_ts)),
+          reb_ratio = offensive_rebounds/defensive_rebounds, 
+          team = factor(team_name), 
+          oppteam = factor(opponent_team_name), 
+         starter = factor(ifelse(starter == T, 1, 0))) %>% 
+  select(points, minutes, efg_pct, tov_rate, free_throw_rate, season, time, oppteam, starter, id) %>% 
+  mutate(tc = time-mean(time))
+  
+
+lm_initial <- lm(points~1, data = bridges5)
+lm_full <- lm(points~ tc + efg_pct + tov_rate + free_throw_rate +  minutes + season , data = bridges5)
+#season was significant for many years, but once we added tc it was not
+#aic still highest for this model
+
+# 
+# MASS::stepAIC(lm_initial, scope = ~ efg_pct + tov_rate + free_throw_rate +  minutes + season + tc  + tc2 + team + oppteam, direction = "forward")
+
+#lowest AIC is full model
+
+summary(lm_full) #predictors all significant, R^2 is a little low
+
+car::vif(lm_full) #multicollinearity not a problem except for season, tc
+
+lmfullresids <- ts(lm_full$residuals)
+plot(lmfullresids)
+#seems mostly stationary, some waviness/nonconstant variance
+
+acf2(lmfullresids)
+#def not stationary, still lags 17, 22, 23 interesting
+
+auto.arima(lmfullresids, trace = T)
+```
+
+
+## Regression With Advanced Stats
+
+```{r adv_stats}
+lm_adv_null <- lm(points~season + tc, data = bridges_fullt)
+
+ # MASS::stepAIC(lm_adv_null, scope = ~ efg_pct + tov_rate + free_throw_rate +  minutes + season + tc  + tc2 + team + oppteam + stl + or + usg + ast + blk + astd, direction = "forward")
+# 
+# model_adv_ <- lm(formula = points ~ usg + efg_pct + minutes + tov_rate + ast + 
+#     team + astd + free_throw_rate + blk + or, data = bridges_full)
+
+
+
+
+
+model_adv_aic <- lm(formula = points ~ season + tc + usg + efg_pct + minutes + 
+    tov_rate + ast + astd + free_throw_rate + or, data = bridges_fullt)
+summary(model_adv_aic)
+#much better R^2 = 0.7569, adjusted 0.7496, 
+
+resids_aic <- ts(model_adv_aic$residuals)
+plot(resids_aic)
+
+acf2(resids_aic)
+#still need arma errors, long lag dependencies
+# 
+auto.arima(resids_aic, trace = T)
+#2,0,1
+```
+
+
+
+
+Combining initial SARIMA model with regression
+                                
+```{r regression_with_ARMA_errors}
+tc <- bridges5$tc
+efg <- bridges5$efg_pct
+tov <- bridges5$tov_rate
+ftr <- bridges5$free_throw_rate
+season <- factor(bridges5$season)
+mins <- bridges5$minutes
+ast <- bridges_fullt$ast
+usg <- bridges_fullt$usg
+or <- bridges_fullt$or
+ast <- bridges_fullt$ast
+astd <- bridges_fullt$astd
+
+
+
+#sarima(bridges_ts, 0, 1, 1, 0, 0, 0, 82, xreg = cbind(tc, efg, tov, ftr, season, mins))
+#consistent with white noise (acf plot is a little shaky)
+#every term significant except tc and season
+#aic = 6.172
+
+#remove season
+
+# sarima(bridges_ts, 0, 1, 1, 0, 0, 0, 82, xreg = cbind(tc, efg, tov, ftr, mins), newxreg = xreg)
+#acf plot still looks shaky
+#aic = 6.171
+
+#remove tc
+
+sarima(bridges_ts_train, 9, 0, 0, xreg = cbind(tc, season, efg, tov, ftr, mins))
+#aic = 6.167
+#ARMA(10,10), aic = 6.17
+#acf plot looks a little better, ljung box and normality look good, all terms significant
+
+#aic = 5.73
+#ar(5), aic = 5.72
+
+
+#seasonal differencing makes plots look better, but AIC = 6.87
+
+#leave tc in because it is integral to model
+
+
+sarima(bridges_ts_train, 2, 0, 0, xreg = cbind(tc, efg, ftr, tov, mins, season, ast, astd, or, usg))
+
+sarima.for(bridges_ts_train,6, 2, 0, 0, xreg = cbind(tc, efg, ftr, tov, mins, season, ast, astd, or, usg), newxreg = cbind(newtc, efgnew, ftrnew, tovnew, minsnew, seasonnew, astnew, astdnew, ornew, usgnew))
+
+pred_adv <- c(20.12150,  22.65530,  18.19259,  18.56132,  19.27321, -15.58948)
+
+
+
+sum((pred_adv[1:5] - bridges_ts_test[1:5])^2)/5
+sum((pred_adv - bridges_ts_test)^2)/6
+
+
+```
+
+Let's make predictions for Bridges' final 6 games!
+
+```{r predictions}
+bridges8 <- bridges7[551:556, ]
+newtc <- c(max(bridges5$time + 1):max(bridges5$time + 6) - mean(bridges5$time))
+efgnew <- bridges8$efg_pct
+tovnew <- bridges8$tov_rate
+ftrnew <- bridges8$free_throw_rate
+minsnew <- bridges8$minutes
+seasonnew <- factor(bridges8$season)
+astnew <- bridges_fullte$ast
+usgnew <- bridges_fullte$usg
+ornew <- bridges_fullte$or
+astnew <- bridges_fullte$ast
+astdnew <- bridges_fullte$astd
+
+newxreg <- cbind(newtc, efgnew, tovnew, ftrnew, minsnew, seasonnew)
+
+
+sarima.for(bridges_ts_train, 6, 23, 0, 0, xreg = cbind(tc, efg, ftr,  tov, mins, season), newxreg = newxreg)
+
+pred1 <- c(20.041199, 21.272105, 17.079712, 19.607218, 20.468325, -2.489337)
+pred1_withseason <- c(26.398089, 27.624772, 23.437898, 25.998351, 26.863749,  3.93902)
+
+mse_sarimareg <- sum((pred1 - bridges_ts_test)^2)/6
+mse_sarimareg
+#5.83997 getting rid of differencing
+
+
+mse_sarimareg_without <- sum((pred1[1:5] - bridges_ts_test[1:5])^2)/5
+mse_sarimareg_without
+#5.76
+
+
+mse_sarimareg_season <- sum((pred1_withseason - bridges_ts_test)^2)/6
+mse_sarimareg_season
+```
+
+Future considerations:
+
+-   ARCH/GARCH might be something to take a look at because points can be volatile on a game-to-game basis
+
+-   The R\^2 in my initial regression model is not high enough. I will try to find more variables to add into the model to address that. The full model had the lowest AIC, which can suggest that there is more work to do.
+
+-   I will also explore different ways of treating the seasonal component, such as including it as a factor in the regression model, or playing around with different numbers besides 82. I wonder if looking at more recent stretches could help if I am trying to predict only a small number of games. Maybe a scaled periodogram would give me a more clear picture.
+
+## Let's Try Sin/Cos
+
+Scaled Periodogram
+
+```{r sincos}
+x=bridges_ts_train-mean(bridges_ts_train) #Centering the data.
+
+
+n=length(x)
+I=(abs(fft(x))^2)/n
+P=(4/n)*I[1:(n/2)]
+plot((0:(n/2-1))/n,P,type='o',xlab='Frequency',ylab='Scaled Periodogram')
+
+perdata <- data.frame(
+  P = c(P), 
+  n = c(1:n)
+) %>%  arrange(desc(P))
+perdata
+
+
+25/n
+n/25
+
+n/20
+
+#first one is 0, 2 corresponds to 1/n
+
+sin550=sin(2*pi*1:n*(1/550))
+cos550=cos(2*pi*1:n*(1/550))
+
+#try 8 and 25
+
+sin25=sin(2*pi*1:n*(1/25))
+cos25=cos(2*pi*1:n*(1/25))
+
+sin8 = sin(2*pi*1:n*(1/8))
+cos8 = cos(2*pi*1:n*(1/8))
+
+
+
+```
+
+
+## Modeling
+
+```{r modeling_sincos}
+sin550=sin(2*pi*1:n*(1/550))
+cos550=cos(2*pi*1:n*(1/550))
+
+freqmod1 <- lm(bridges_ts_train~sin550+cos550)
+
+summary(freqmod1)
+#r^2 is 0.2602, less than regression.... add them together?
+
+
+residuals1 <- freqmod1$residuals
+
+plot(residuals1,type='l')
+#still a little bit of seasonality/wave
+
+astsa::acf2(residuals1) #Suggests trying AR(4).
+#try ar(7)?
+
+sarima(bridges_ts_train,2,0,2,xreg=cbind(sin550,cos550))
+#looking a little better
+
+
+
+```
+
+### Making Predictions Using This Model
+
+```{r pred_sincos}
+newt=551:556
+newcos=cos(2*pi*newt/550)
+newsin=sin(2*pi*newt/550)
+
+
+sarima.for(bridges_ts_train, 6,  2, 0, 2, xreg = cbind(sin550,cos550), newxreg =  cbind(newsin,newcos))
+
+pred2 <- c(16.40065 , 16.28502, 16.04815, 15.86972, 15.67527, 15.49521)
+#predicts he is on a downswing
+
+mse_sincos <- sum((pred2 - bridges_ts_test)^2)/6
+mse_sincos
+#48.82
+
+mse_sincos_without <- sum((pred2[1:5] - bridges_ts_test[1:5])^2)/5
+mse_sincos_without
+#10.57
+
+```
+
+
+## Combine it all!!
+
+
+```{r combine_regression_sincos_sarima}
+
+lmfull_sincos <- lm(points~ tc + efg_pct + tov_rate + free_throw_rate +  minutes + season  + sin550 + cos550 + sin25 + cos25 + sin8 + cos8, data = bridges5 %>% 
+                      mutate(sin550 = c(sin550), 
+                             cos550 = c(cos550),
+                             sin25 = c(sin25),
+                             cos25 = c(cos25), 
+                             sin8 = c(sin8),
+                             cos8 = c(cos8)))
+summary(lmfull_sincos)
+
+
+sarima(bridges_ts_train, 1, 0, 1, xreg = cbind(tc, efg, tov, ftr, mins, sin550, cos550))
+# sarima(bridges_ts_train, 23, 0, 0, xreg = cbind(tc, efg, tov, ftr, mins, sin550, cos550))
+
+#5, 0, 1: aic = 6.18
+#1, 0, 1: aic = 6.17
+
+sarima.for(bridges_ts_train, 6, 1, 0, 1, xreg = cbind(tc, efg, tov, ftr, mins, sin550,cos550), newxreg =  cbind(newtc, efgnew, tovnew, ftrnew, minsnew, newsin, newcos))
+
+
+pred3 <- c(19.005492, 20.140941, 15.783254, 18.263857, 18.965235, -4.218095)
+pred4 <- c(18.760112, 19.894815, 16.148965, 18.573350, 19.021267, -4.288115)
+
+
+pred23 <- c(17.606176, 18.094530, 15.359467, 20.026041, 17.666233, -3.792933)
+
+mse_combined <- sum((pred3 - bridges_ts_test)^2)/6
+mse_combined
+#5.146
+
+mse_combined_without <- sum((pred3[1:5] - bridges_ts_test[1:5])^2)/5
+mse_combined_without
+#2.62
+
+
+mse_combined5 <- sum((pred4 - bridges_ts_test)^2)/6
+mse_combined5
+#5.922
+
+mse_combined23 <- sum((pred23 - bridges_ts_test)^2)/6
+mse_combined23
+#7.803
+
+
+#higher, maybe this has to do with 0 value, change imputation strategy
+
+```
+
+
+## Let's Try using Log or Sqrt
+
+```{r using_log}
+lbridges_ts_train <- log(bridges_ts_train+1)
+
+plot(lbridges_ts_train)
+#still slight upward trend
+
+acf2(lbridges_ts_train)
+
+sbridges_ts_train <- sqrt(bridges_ts_train)
+acf2(sbridges_ts_train)
+
+
+```
+
+
+# Modeling The Log
+
+```{r sarima_logmodel}
+#ar10
+sarima(lbridges_ts_train, 10, 0, 1)
+#now problem with left tail, ljung-box mostly good, consistent w white noise, except for extreme values
+#10th ar term significant without MA
+
+#when I add in the MA term, the ar terms are no longer significant, but plots look better
+#left tail bad
+
+lmfull_log <- lm(log(points+1)~ tc + efg_pct + tov_rate + free_throw_rate +  minutes + season , data = bridges5)
+summary(lmfull_log)
+
+
+
+
+lmfullsqrt <- lm(sqrt(points)~ tc + efg_pct + tov_rate + free_throw_rate +  minutes + season , data = bridges5)
+
+
+sresids_lmfull <- ts(lmfullsqrt$residuals)
+auto.arima(sresids_lmfull)
+```
+
+## Adding In Regression
+
+```{r regression}
+sarima(lbridges_ts_train, 2, 0,  3, xreg = cbind(tc, efg, tov, ftr, mins, season))
+
+#left tail looks better, one extreme value
+
+sarima.for(lbridges_ts_train, 6, 10, 1,  5, xreg = cbind(tc, efg, tov, ftr, mins, season), newxreg = cbind(newtc, efgnew, tovnew, ftrnew, minsnew, seasonnew))
+
+predlog_high <- c(3.0202443, 3.3163410, 2.7729655, 3.1079583, 3.1046292, 0.9382113)
+
+predlog_high_back <- exp(predlog_high) - 1
+
+mse_log_high <- sum((predlog_high_back-bridges_ts_test)^2)/6
+#10.35
+
+mse_log_high5 <- sum((predlog_high_back[1:5]-bridges_ts_test[1:5])^2)/5
+#11.94
+
+```
+
+# ARMA with sqrt 
+
+```{r sqrt}
+
+sarima(sbridges_ts_train, 2, 0, 1, xreg = cbind(tc, efg, tov, ftr, mins, season))
+
+sarima.for(sbridges_ts_train, 6, 2, 0, 1, xreg = cbind(tc, efg, tov, ftr, mins, season), newxreg = cbind(newtc, efgnew, tovnew, ftrnew, minsnew, seasonnew))
+
+predsqrt21 <- c(4.762811, 5.067646, 4.402997, 4.799100, 4.923546, 1.167484)^2
+
+sum((predsqrt21-bridges_ts_test)^2)/6
+#23.41
+
+#looks a lot more normal, acf plot looks better, now just the ljung box values
+```
+
+# Making Predictions
+
+```{r predicting with log}
+sarima.for(lbridges_ts_train, 6, 2, 0, 3, xreg = cbind(tc, efg, tov, ftr, mins, season),  newxreg =  cbind(newtc, efgnew, tovnew, ftrnew, minsnew, seasonnew))
+
+predlog <- c(3.1245111, 3.1948226, 2.8126132, 3.1555697, 3.1500946, 0.9326371)
+predlog_actual <- exp(predlog) - 1
+
+sarima.for(lbridges_ts_train, 6, 1, 0, 1, xreg = cbind(tc, efg, tov, ftr, mins, season),  newxreg =  cbind(newtc, efgnew, tovnew, ftrnew, minsnew, seasonnew))
+
+predlog23 <- c(3.0414817, 3.3063478, 2.8575451, 3.2505610, 3.1950055, 0.9060875)
+predlog_actual23 <- exp(predlog23) - 1
+
+
+mse_log23 <- sum((predlog_actual23-bridges_ts_test)^2)/6
+#21.40
+
+sum((predlog_actual23[1:5]-bridges_ts_test[1:5])^2)/5
+#25.245
+
+
+
+predlogarma <- c(3.0280573, 3.2369827, 2.8192700, 3.0614490, 3.1227286, 0.8871352)
+
+predlogarma1 <- exp(predlogarma) - 1
+
+mse_logarma <- sum((predlogarma1-bridges_ts_test)^2)/6
+#7.46
+
+sum((predlogarma1[1:5]-bridges_ts_test[1:5])^2)/5
+#8.54
+
+
+
+```
+
+
+## Plotting Each Prediction vs. The Actual Values
+
+```{r plotting_predictions}
+plot_data <- data.frame(
+  time = c(551:556),
+  y = c(bridges_ts_test),
+  sarima = c(pred0),
+  pred00 = c(pred00),
+  pred000 = c(pred000),
+  reg = c(pred1),
+  sin = c(pred2), 
+  combined = c(pred3), 
+  ar23 = c(25.532889, 22.522912, 24.293460, 27.567209, 20.533382, 3.818603),
+  predlog = c(predlogarma1)
+)
+
+
+predplot <- ggplot(plot_data,aes(x = time, y = y)) + 
+  geom_point() + 
+  geom_line() + 
+  geom_point(aes(x = time, y = pred0), color = "purple") + 
+  geom_point(aes(x = time, y = pred1), color = "red") + 
+  geom_point(aes(x = time, y = pred2), color = "green") + 
+  geom_point(aes(x = time, y = pred3), color = "blue") + 
+  geom_line(aes(x = time, y = pred0), color = "purple", lty = 2) + 
+  geom_line(aes(x = time, y = pred1), color = "red", lty = 2) + 
+  geom_line(aes(x = time, y = pred2), color = "green", lty = 2) + 
+  geom_line(aes(x = time, y = pred3), color = "blue", lty = 2)  + 
+  geom_point(aes(x = time, y = ar23), color = "gray") + 
+  geom_line(aes(x = time, y = ar23), color = "gray", lty = 2)  + 
+   geom_point(aes(x = time, y = predlog), color = "orange") + 
+  geom_line(aes(x = time, y = predlog), color = "orange", lty = 2) + theme(panel.background = element_rect(fill = "antiquewhite")) +
+  labs(title = "Plot of Each Prediction With The Actual Results",
+    x = "Game", y = "Points")
+
+predplot 
+```
+
+
+
+
+## Trying GARCH
+
+```{r garch}
+
+bridges_garch <- garchFit(~arma(1,1)+garch(1,1),bridges_ts_train,trace=F)
+
+summary(bridges_garch)
+
+garchpred <- predict(bridges_garch,5,confidence=0.95,plot=F, nx = 550)
+
+msegarch <- sum((garchpred$meanForecast - bridges_ts_test[1:5] )^2)/5
+#7.49
+
+```
+
+# adding adv. stats to logmodel
+
+```{r adding_advstats}
+sarima(lbridges_ts_train, 1, 0, 1, xreg = cbind(tc, efg, tov, ftr, mins, season, usg, ast, astd))
+
+
+sarima.for(lbridges_ts_train, 6, 1, 0, 1, xreg = cbind(tc, efg, tov, ftr, mins, season, usg, ast, astd), newxreg = cbind(newtc, efgnew, tovnew, ftrnew, minsnew, seasonnew, usgnew, astnew, astdnew))
+
+predlog_adv <- c(2.6510131,  2.9585413,  2.5649399,  2.6336844,  2.6259274, -0.8029305)
+predlog_act <- exp(predlog_adv) - 1
+
+sum((predlog_act -bridges_ts_test)^2)/6
+#16.50
+ 
+
+```
+
+## Trying advstats again
+
+```{r trying_advstats again}
+sarima.for(bridges_ts_train, 6, 1, 0, 1, xreg = cbind(tc, efg, tov, ftr, mins, season, usg, ast, astd, sin550, cos550), )
+
+
+```
+
